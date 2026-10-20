@@ -128,8 +128,12 @@ export const poolService = {
             select: {
                 id: true,
                 email: true,
+                provider: true,
                 clientId: true,
                 refreshToken: true,
+                password: true,
+                imapHost: true,
+                imapPort: true,
                 groupId: true,
                 group: {
                     select: {
@@ -146,7 +150,8 @@ export const poolService = {
 
         return {
             ...email,
-            refreshToken: decrypt(email.refreshToken),
+            refreshToken: email.refreshToken ? decrypt(email.refreshToken) : undefined,
+            password: email.password ? decrypt(email.password) : undefined,
             fetchStrategy: email.group?.fetchStrategy || 'GRAPH_FIRST',
         };
     },

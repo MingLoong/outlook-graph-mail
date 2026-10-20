@@ -79,9 +79,12 @@ model EmailGroup {
 model EmailAccount {
   id           Int         @id @default(autoincrement())
   email        String      @unique @db.VarChar(255)
-  clientId     String      @map("client_id") @db.VarChar(100)
+  provider     String      @default("outlook") @db.VarChar(32)
+  clientId     String?     @map("client_id") @db.VarChar(100)
   password     String?     @db.VarChar(255)
-  refreshToken String      @map("refresh_token") @db.Text
+  refreshToken String?     @map("refresh_token") @db.Text
+  imapHost     String?     @map("imap_host") @db.VarChar(255)
+  imapPort     Int         @default(993) @map("imap_port")
   status       EmailStatus @default(ACTIVE)
   groupId      Int?        @map("group_id")
   lastCheckAt  DateTime?   @map("last_check_at")

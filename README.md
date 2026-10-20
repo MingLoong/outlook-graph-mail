@@ -205,7 +205,38 @@ npm run test
 | `GRAPH_ONLY` | 仅 Graph，不回退 |
 | `IMAP_ONLY` | 仅 IMAP，不回退 |
 
-说明：`IMAP_ONLY` 不支持“清空邮箱（process-mailbox）”，该操作依赖 Graph API。
+说明：
+- `IMAP_ONLY` 与所有第三方 IMAP 邮箱不支持“清空邮箱（process-mailbox）”，该操作依赖 Graph API（仅 Outlook 账号可用）。
+- 拉取策略仅对 **Outlook 账号**生效；第三方 IMAP 邮箱始终走密码/授权码直连，与策略无关。
+
+## 第三方邮箱支持
+
+除 Outlook（OAuth2）外，支持通过 **IMAP 密码/授权码** 接入第三方邮箱：
+
+| 提供商 | IMAP 服务器 | 认证方式 | 说明 |
+|--------|------------|----------|------|
+| `outlook` | outlook.office365.com | OAuth2 (clientId + refreshToken) | 原有方式 |
+| `gmail` | imap.gmail.com | 应用专用密码 | 需在 Gmail 设置中开启 IMAP 并生成应用专用密码 |
+| `qq` | imap.qq.com | 授权码 | 需在 QQ 邮箱设置中开启 IMAP 服务获取授权码 |
+| `163` | imap.163.com | 授权码 | 需在 163 邮箱设置中开启 IMAP 服务 |
+| `126` | imap.126.com | 授权码 | 需在 126 邮箱设置中开启 IMAP 服务 |
+| `yahoo` | imap.mail.yahoo.com | 应用密码 | 需在 Yahoo 账户安全设置中生成应用密码 |
+| `aliyun` | imap.aliyun.com | 登录密码/授权码 | 阿里邮箱 |
+| `custom` | 自定义 | 密码 | 手动填写 IMAP 服务器地址和端口 |
+
+### 特性
+
+- **域名自动识别**：批量导入时选择「智能识别」，按邮箱域名（如 `@gmail.com`、`@qq.com`）自动判断账号类型，支持混合文件导入。
+- **文件夹映射**：不同提供商的垃圾箱/已删除文件夹名不同（如 Gmail 垃圾箱为 `[Gmail]/Spam`、QQ 为 `Junk`），系统按提供商自动映射，`mailbox=junk` 参数在所有提供商下通用。
+- **管理面板**：添加邮箱时选择提供商后自动填充 IMAP 配置；输入邮箱地址失焦后自动识别提供商。
+- **Token 刷新**：批量/单个 Token 刷新仅作用于 Outlook 账号，第三方 IMAP 邮箱自动跳过。
+
+### 批量导入格式
+
+| 提供商 | 每行格式 |
+|--------|----------|
+| Outlook | `邮箱----clientId----refreshToken` 或 `邮箱----密码----clientId----refreshToken` |
+| 第三方 IMAP | `邮箱----密码`（自定义 IMAP 为 `邮箱----密码----imap地址----imap端口`） |
 
 ## API 文档
 

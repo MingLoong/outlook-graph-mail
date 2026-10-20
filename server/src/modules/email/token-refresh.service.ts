@@ -324,6 +324,7 @@ export const tokenRefreshService = {
             select: {
                 id: true,
                 email: true,
+                provider: true,
                 clientId: true,
                 refreshToken: true,
                 status: true,
@@ -337,6 +338,15 @@ export const tokenRefreshService = {
 
         if (account.status === 'DISABLED') {
             return { emailId, email: account.email, success: false, message: 'Email account is disabled' };
+        }
+
+        // 第三方 IMAP 邮箱没有 OAuth refresh token，无需刷新
+        if (account.provider !== 'outlook') {
+            return { emailId, email: account.email, success: false, message: 'Not an Outlook account, token refresh not applicable' };
+        }
+
+        if (!account.refreshToken || !account.clientId) {
+            return { emailId, email: account.email, success: false, message: 'Missing refresh token or clientId' };
         }
 
         let currentRefreshToken: string;
@@ -451,6 +461,8 @@ export const tokenRefreshService = {
         try {
             const where: Prisma.EmailAccountWhereInput = {
                 status: { not: 'DISABLED' },
+                // 仅 Outlook 账号有 OAuth refresh token
+                provider: 'outlook',
             };
             if (groupId) {
                 where.groupId = groupId;

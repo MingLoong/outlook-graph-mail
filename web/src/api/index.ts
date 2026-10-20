@@ -466,14 +466,26 @@ export const apiKeyApi = {
 // ========================================
 
 export const emailApi = {
-    getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; keyword?: string; groupId?: number }) =>
+    getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; provider?: string; keyword?: string; groupId?: number }) =>
         requestGet<ApiPagedList<T>>('/admin/emails', { params, cacheMs: 800 }),
+
+    getProviders: <T = Record<string, unknown>>() =>
+        requestGet<T[]>('/admin/emails/providers'),
 
     getById: <T = Record<string, unknown>>(id: number, includeSecrets?: boolean) =>
         requestGet<T>(`/admin/emails/${id}`, { params: { secrets: includeSecrets } }),
 
-    create: (data: { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }) =>
-        requestPost<Record<string, unknown>, { email: string; clientId: string; refreshToken: string; password?: string; groupId?: number }>(
+    create: (data: {
+        email: string;
+        provider?: string;
+        clientId?: string;
+        refreshToken?: string;
+        password?: string;
+        imapHost?: string;
+        imapPort?: number;
+        groupId?: number;
+    }) =>
+        requestPost<Record<string, unknown>, typeof data>(
             '/admin/emails',
             data,
             {
@@ -481,10 +493,10 @@ export const emailApi = {
             }
         ),
 
-    import: (content: string, separator?: string, groupId?: number) =>
-        requestPost<Record<string, unknown>, { content: string; separator?: string; groupId?: number }>(
+    import: (content: string, separator?: string, groupId?: number, provider?: string) =>
+        requestPost<Record<string, unknown>, { content: string; separator?: string; groupId?: number; provider?: string }>(
             '/admin/emails/import',
-            { content, separator, groupId },
+            { content, separator, groupId, provider },
             {
                 invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
             }
@@ -495,8 +507,18 @@ export const emailApi = {
             params: { ids: ids?.join(','), separator, groupId },
         }),
 
-    update: (id: number, data: { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }) =>
-        requestPut<Record<string, unknown>, { email?: string; clientId?: string; refreshToken?: string; password?: string; status?: string; groupId?: number | null }>(
+    update: (id: number, data: {
+        email?: string;
+        provider?: string;
+        clientId?: string;
+        refreshToken?: string;
+        password?: string;
+        imapHost?: string;
+        imapPort?: number;
+        status?: string;
+        groupId?: number | null;
+    }) =>
+        requestPut<Record<string, unknown>, typeof data>(
             `/admin/emails/${id}`,
             data,
             {

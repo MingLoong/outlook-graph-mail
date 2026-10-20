@@ -54,6 +54,63 @@ const MAIL_FETCH_STRATEGY_LABELS: Record<MailFetchStrategy, string> = {
     IMAP_ONLY: '仅 IMAP',
 };
 
+// 第三方邮箱提供商选项（与后端 providers.ts 保持一致）
+const PROVIDER_OPTIONS = [
+    { value: 'outlook', label: 'Outlook/Microsoft', authType: 'oauth2', imapHost: '', imapPort: 993, note: '使用 OAuth2 认证（clientId + refreshToken）' },
+    { value: 'gmail', label: 'Gmail', authType: 'password', imapHost: 'imap.gmail.com', imapPort: 993, note: '需开启 IMAP，并使用应用专用密码（非登录密码）' },
+    { value: 'qq', label: 'QQ邮箱', authType: 'password', imapHost: 'imap.qq.com', imapPort: 993, note: '需开启 IMAP 服务，使用授权码（非 QQ 密码）' },
+    { value: '163', label: '163邮箱', authType: 'password', imapHost: 'imap.163.com', imapPort: 993, note: '需开启 IMAP 服务，使用授权码' },
+    { value: '126', label: '126邮箱', authType: 'password', imapHost: 'imap.126.com', imapPort: 993, note: '需开启 IMAP 服务，使用授权码' },
+    { value: 'yahoo', label: 'Yahoo邮箱', authType: 'password', imapHost: 'imap.mail.yahoo.com', imapPort: 993, note: '需在账户安全设置中生成应用密码' },
+    { value: 'aliyun', label: '阿里邮箱', authType: 'password', imapHost: 'imap.aliyun.com', imapPort: 993, note: '使用阿里邮箱登录密码或授权码' },
+    { value: 'custom', label: '自定义 IMAP', authType: 'password', imapHost: '', imapPort: 993, note: '手动填写 IMAP 服务器地址和端口' },
+] as const;
+
+type MailProviderKey = (typeof PROVIDER_OPTIONS)[number]['value'];
+
+const PROVIDER_LABELS: Record<string, string> = Object.fromEntries(
+    PROVIDER_OPTIONS.map((p) => [p.value, p.label])
+);
+
+const PROVIDER_COLORS: Record<string, string> = {
+    outlook: 'blue',
+    gmail: 'red',
+    qq: 'green',
+    '163': 'orange',
+    '126': 'gold',
+    yahoo: 'purple',
+    aliyun: 'cyan',
+    custom: 'default',
+};
+
+// 域名 -> provider 自动识别
+const DOMAIN_PROVIDER_MAP: Record<string, string> = {
+    'gmail.com': 'gmail',
+    'googlemail.com': 'gmail',
+    'qq.com': 'qq',
+    'foxmail.com': 'qq',
+    '163.com': '163',
+    '126.com': '126',
+    'yahoo.com': 'yahoo',
+    'yahoo.co.jp': 'yahoo',
+    'yahoo.co.uk': 'yahoo',
+    'yahoo.com.cn': 'yahoo',
+    'aliyun.com': 'aliyun',
+    'alimail.com': 'aliyun',
+    'outlook.com': 'outlook',
+    'hotmail.com': 'outlook',
+    'live.com': 'outlook',
+    'live.cn': 'outlook',
+    'msn.com': 'outlook',
+};
+
+const inferProviderFromEmail = (email: string): string | undefined => {
+    if (!email || !email.includes('@')) return undefined;
+    const domain = email.split('@')[1]?.toLowerCase().trim();
+    if (!domain) return undefined;
+    return DOMAIN_PROVIDER_MAP[domain];
+};
+
 interface EmailGroup {
     id: number;
     name: string;
@@ -67,7 +124,10 @@ interface EmailGroup {
 interface EmailAccount {
     id: number;
     email: string;
-    clientId: string;
+    provider: string;
+    clientId: string | null;
+    imapHost: string | null;
+    imapPort: number;
     status: 'ACTIVE' | 'ERROR' | 'DISABLED';
     groupId: number | null;
     group: { id: number; name: string } | null;
@@ -92,7 +152,11 @@ interface MailItem {
 }
 
 interface EmailDetailsResult extends EmailAccount {
-    refreshToken: string;
+    clientId: string | null;
+    refreshToken: string | null;
+    password: string | null;
+    imapHost: string | null;
+    imapPort: number;
 }
 
 const EmailsPage: React.FC = () => {
@@ -112,6 +176,7 @@ const EmailsPage: React.FC = () => {
     const [importContent, setImportContent] = useState('');
     const [separator, setSeparator] = useState('----');
     const [importGroupId, setImportGroupId] = useState<number | undefined>(undefined);
+    const [importProvider, setImportProvider] = useState<string>('auto');
     const [mailList, setMailList] = useState<MailItem[]>([]);
     const [mailLoading, setMailLoading] = useState(false);
     const [currentEmail, setCurrentEmail] = useState<string>('');
@@ -122,6 +187,9 @@ const EmailsPage: React.FC = () => {
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
     const [emailEditLoading, setEmailEditLoading] = useState(false);
     const [form] = Form.useForm();
+    const watchedProvider = Form.useWatch('provider', form) as MailProviderKey | undefined;
+    const isOutlookProvider = (watchedProvider || 'outlook') === 'outlook';
+    const isCustomProvider = watchedProvider === 'custom';
 
     // Group-related state
     const [groups, setGroups] = useState<EmailGroup[]>([]);
@@ -198,6 +266,7 @@ const EmailsPage: React.FC = () => {
         setEditingId(null);
         setEmailEditLoading(false);
         form.resetFields();
+        form.setFieldsValue({ provider: 'outlook', imapPort: 993 });
         setModalVisible(true);
     };
 
@@ -212,8 +281,12 @@ const EmailsPage: React.FC = () => {
                 const details = res.data;
                 form.setFieldsValue({
                     email: details.email,
+                    provider: details.provider || 'outlook',
                     clientId: details.clientId,
                     refreshToken: details.refreshToken,
+                    password: details.password,
+                    imapHost: details.imapHost,
+                    imapPort: details.imapPort,
                     status: details.status,
                     groupId: details.groupId,
                 });
@@ -266,13 +339,33 @@ const EmailsPage: React.FC = () => {
             const values = await form.validateFields();
             const normalizedGroupId =
                 values.groupId === null ? null : toOptionalNumber(values.groupId);
+            const provider = (values.provider || 'outlook') as string;
+
+            // 按提供商组装提交数据
+            const buildPayload = () => {
+                const base: Record<string, unknown> = {
+                    email: values.email,
+                    provider,
+                    status: values.status,
+                };
+                if (provider === 'outlook') {
+                    if (values.clientId) base.clientId = values.clientId;
+                    if (values.refreshToken) base.refreshToken = values.refreshToken;
+                    if (values.password) base.password = values.password;
+                } else {
+                    if (values.password) base.password = values.password;
+                    if (values.imapHost) base.imapHost = values.imapHost;
+                    if (values.imapPort) base.imapPort = values.imapPort;
+                }
+                return base;
+            };
 
             if (editingId) {
                 const submitData = {
-                    ...values,
+                    ...buildPayload(),
                     groupId: normalizedGroupId ?? null,
                 };
-                const res = await emailApi.update(editingId, submitData);
+                const res = await emailApi.update(editingId, submitData as Parameters<typeof emailApi.update>[1]);
                 if (res.code === 200) {
                     message.success('更新成功');
                     setModalVisible(false);
@@ -283,10 +376,10 @@ const EmailsPage: React.FC = () => {
                 }
             } else {
                 const submitData = {
-                    ...values,
+                    ...buildPayload(),
                     groupId: toOptionalNumber(values.groupId),
                 };
-                const res = await emailApi.create(submitData);
+                const res = await emailApi.create(submitData as Parameters<typeof emailApi.create>[0]);
                 if (res.code === 200) {
                     message.success('创建成功');
                     setModalVisible(false);
@@ -311,13 +404,15 @@ const EmailsPage: React.FC = () => {
             const res = await emailApi.import(
                 importContent,
                 separator,
-                toOptionalNumber(importGroupId)
+                toOptionalNumber(importGroupId),
+                importProvider
             );
             if (res.code === 200) {
                 message.success(res.message);
                 setImportModalVisible(false);
                 setImportContent('');
                 setImportGroupId(undefined);
+                setImportProvider('auto');
                 fetchData();
                 fetchGroups();
             } else {
@@ -558,10 +653,25 @@ const EmailsPage: React.FC = () => {
             ellipsis: true,
         },
         {
-            title: '客户端 ID',
-            dataIndex: 'clientId',
-            key: 'clientId',
+            title: '提供商',
+            dataIndex: 'provider',
+            key: 'provider',
+            width: 120,
+            render: (provider: string | null) => {
+                const key = provider || 'outlook';
+                return <Tag color={PROVIDER_COLORS[key] || 'default'}>{PROVIDER_LABELS[key] || key}</Tag>;
+            },
+        },
+        {
+            title: '客户端 ID / IMAP 服务器',
+            key: 'credential',
             ellipsis: true,
+            render: (_: unknown, record: EmailAccount) => {
+                if ((record.provider || 'outlook') === 'outlook') {
+                    return record.clientId || '-';
+                }
+                return record.imapHost ? `${record.imapHost}:${record.imapPort}` : '-';
+            },
         },
         {
             title: '分组',
@@ -617,12 +727,12 @@ const EmailsPage: React.FC = () => {
             width: 240,
             render: (_: unknown, record: EmailAccount) => (
                 <Space>
-                    <Tooltip title="刷新 Token">
+                    <Tooltip title={(record.provider || 'outlook') === 'outlook' ? '刷新 Token' : '第三方邮箱无需刷新 Token'}>
                         <Button
                             type="text"
                             icon={<SyncOutlined spin={refreshingTokenIds.has(record.id)} />}
                             onClick={() => handleRefreshToken(record)}
-                            disabled={refreshingTokenIds.has(record.id) || record.status === 'DISABLED'}
+                            disabled={refreshingTokenIds.has(record.id) || record.status === 'DISABLED' || (record.provider || 'outlook') !== 'outlook'}
                         />
                     </Tooltip>
                     <Tooltip title="收件箱">
@@ -905,26 +1015,104 @@ const EmailsPage: React.FC = () => {
                 <Spin spinning={emailEditLoading}>
                     <Form form={form} layout="vertical">
                     <Form.Item name="email" label="邮箱地址" rules={[{ required: true, message: '请输入邮箱地址' }, { type: 'email', message: '请输入有效的邮箱地址' }]}>
-                        <Input placeholder="example@outlook.com" />
+                        <Input
+                            placeholder="example@outlook.com"
+                            onBlur={(e) => {
+                                // 输入邮箱后自动识别提供商（仅当未手动选择时）
+                                const currentProvider = form.getFieldValue('provider');
+                                if (currentProvider && currentProvider !== 'outlook') return;
+                                const inferred = inferProviderFromEmail((e.target as HTMLInputElement).value);
+                                if (inferred && inferred !== 'outlook') {
+                                    const preset = PROVIDER_OPTIONS.find((p) => p.value === inferred);
+                                    form.setFieldsValue({
+                                        provider: inferred,
+                                        imapHost: preset?.imapHost,
+                                        imapPort: preset?.imapPort,
+                                    });
+                                    message.info(`已自动识别为 ${preset?.label || inferred}`);
+                                }
+                            }}
+                        />
                     </Form.Item>
-                    <Form.Item name="password" label="密码">
-                        <Input.Password placeholder="可选" />
+                    <Form.Item
+                        name="provider"
+                        label="邮箱提供商"
+                        rules={[{ required: true, message: '请选择邮箱提供商' }]}
+                    >
+                        <Select
+                            placeholder="选择邮箱提供商"
+                            onChange={(value: string) => {
+                                const preset = PROVIDER_OPTIONS.find((p) => p.value === value);
+                                if (preset) {
+                                    form.setFieldsValue({
+                                        imapHost: preset.imapHost,
+                                        imapPort: preset.imapPort,
+                                    });
+                                }
+                            }}
+                            options={PROVIDER_OPTIONS.map((p) => ({
+                                value: p.value,
+                                label: p.label,
+                            }))}
+                        />
                     </Form.Item>
 
-                    <Form.Item
-                        name="clientId"
-                        label="客户端 ID"
-                        rules={[{ required: true, message: '请输入客户端 ID' }]}
-                    >
-                        <Input placeholder="Azure AD 应用程序 ID" />
-                    </Form.Item>
-                    <Form.Item
-                        name="refreshToken"
-                        label="刷新令牌"
-                        rules={[{ required: !editingId, message: '请输入刷新令牌' }]}
-                    >
-                        <TextArea rows={4} placeholder="OAuth2 Refresh Token" />
-                    </Form.Item>
+                    {watchedProvider && (
+                        <div style={{ marginBottom: 16, padding: '8px 12px', background: '#f6f8fa', borderRadius: 6, fontSize: 13, color: '#555' }}>
+                            💡 {PROVIDER_OPTIONS.find((p) => p.value === watchedProvider)?.note}
+                        </div>
+                    )}
+
+                    {isOutlookProvider ? (
+                        <>
+                            <Form.Item name="password" label="密码（可选）">
+                                <Input.Password placeholder="可选" />
+                            </Form.Item>
+                            <Form.Item
+                                name="clientId"
+                                label="客户端 ID"
+                                rules={[{ required: true, message: '请输入客户端 ID' }]}
+                            >
+                                <Input placeholder="Azure AD 应用程序 ID" />
+                            </Form.Item>
+                            <Form.Item
+                                name="refreshToken"
+                                label="刷新令牌"
+                                rules={[{ required: !editingId, message: '请输入刷新令牌' }]}
+                            >
+                                <TextArea rows={4} placeholder="OAuth2 Refresh Token" />
+                            </Form.Item>
+                        </>
+                    ) : (
+                        <>
+                            <Form.Item
+                                name="password"
+                                label={watchedProvider === 'qq' || watchedProvider === '163' || watchedProvider === '126' ? '授权码' : '密码/应用专用密码'}
+                                rules={[{ required: !editingId, message: '请输入密码或授权码' }]}
+                            >
+                                <Input.Password placeholder={
+                                    watchedProvider === 'gmail' ? 'Gmail 应用专用密码（非登录密码）' :
+                                    watchedProvider === 'qq' || watchedProvider === '163' || watchedProvider === '126' ? '邮箱设置中生成的 IMAP 授权码' :
+                                    '密码或授权码'
+                                } />
+                            </Form.Item>
+                            {isCustomProvider && (
+                                <>
+                                    <Form.Item
+                                        name="imapHost"
+                                        label="IMAP 服务器地址"
+                                        rules={[{ required: true, message: '请输入 IMAP 服务器地址' }]}
+                                    >
+                                        <Input placeholder="imap.example.com" />
+                                    </Form.Item>
+                                    <Form.Item name="imapPort" label="IMAP 端口" initialValue={993}>
+                                        <Input type="number" placeholder="993" />
+                                    </Form.Item>
+                                </>
+                            )}
+                        </>
+                    )}
+
                     <Form.Item name="groupId" label="所属分组">
                         <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
                     </Form.Item>
@@ -950,9 +1138,11 @@ const EmailsPage: React.FC = () => {
                 <Space direction="vertical" style={{ width: '100%' }} size="middle">
                     <div>
                         <Text type="secondary">
-                            上传文件或粘贴内容。支持多种格式，将尝试自动解析。
+                            上传文件或粘贴内容。选择「智能识别」将按邮箱域名自动判断账号类型。
                             <br />
-                            推荐格式：邮箱{separator}密码{separator}客户端ID{separator}刷新令牌
+                            Outlook 格式：邮箱{separator}客户端ID{separator}刷新令牌（4 列为 邮箱{separator}密码{separator}客户端ID{separator}刷新令牌）
+                            <br />
+                            第三方 IMAP 格式：邮箱{separator}密码（自定义 IMAP 为 邮箱{separator}密码{separator}IMAP地址{separator}端口）
                         </Text>
                     </div>
                     <Input
@@ -960,6 +1150,16 @@ const EmailsPage: React.FC = () => {
                         value={separator}
                         onChange={(e) => setSeparator(e.target.value)}
                         style={{ width: 200 }}
+                    />
+                    <Select
+                        placeholder="导入提供商类型"
+                        value={importProvider}
+                        style={{ width: 260 }}
+                        onChange={(value: string) => setImportProvider(value)}
+                        options={[
+                            { value: 'auto', label: '🔍 智能识别（按域名自动判断）' },
+                            ...PROVIDER_OPTIONS.map((p) => ({ value: p.value, label: p.label })),
+                        ]}
                     />
                     <Select
                         placeholder="导入到分组（可选）"

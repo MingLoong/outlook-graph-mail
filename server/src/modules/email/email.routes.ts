@@ -3,6 +3,7 @@ import { emailService } from './email.service.js';
 import { mailService } from '../mail/mail.service.js';
 import { tokenRefreshService } from './token-refresh.service.js';
 import { createEmailSchema, updateEmailSchema, listEmailSchema, importEmailSchema } from './email.schema.js';
+import { getProviderList } from '../mail/providers.js';
 import { z } from 'zod';
 import { AppError } from '../../plugins/error.js';
 import { getTokenRefreshJobNextRunAt, refreshTokenRefreshJobSchedule } from '../../jobs/token-refresh.js';
@@ -10,6 +11,11 @@ import { getTokenRefreshJobNextRunAt, refreshTokenRefreshJobSchedule } from '../
 const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 所有路由需要 JWT 认证
     fastify.addHook('preHandler', fastify.authenticateJwt);
+
+    // 邮箱提供商列表
+    fastify.get('/providers', async () => {
+        return { success: true, data: getProviderList() };
+    });
 
     // 列表
     fastify.get('/', async (request) => {
@@ -135,8 +141,12 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailData.id,
             email: emailData.email,
+            provider: emailData.provider,
             clientId: emailData.clientId,
-            refreshToken: emailData.refreshToken!,
+            refreshToken: emailData.refreshToken,
+            password: emailData.password,
+            imapHost: emailData.imapHost,
+            imapPort: emailData.imapPort,
             autoAssigned: false,
             fetchStrategy: emailData.group?.fetchStrategy,
         };
@@ -156,8 +166,12 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailData.id,
             email: emailData.email,
+            provider: emailData.provider,
             clientId: emailData.clientId,
-            refreshToken: emailData.refreshToken!,
+            refreshToken: emailData.refreshToken,
+            password: emailData.password,
+            imapHost: emailData.imapHost,
+            imapPort: emailData.imapPort,
             autoAssigned: false,
             fetchStrategy: emailData.group?.fetchStrategy,
         };

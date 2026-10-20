@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+// 邮件请求 Schema
 export const mailRequestSchema = z.object({
     email: z.string().email().optional(),
     auto: z.boolean().or(z.string().transform(v => v === 'true' || v === '1')).optional(),

@@ -147,8 +147,12 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailAccount.id,
             email: emailAccount.email,
+            provider: emailAccount.provider,
             clientId: emailAccount.clientId,
-            refreshToken: emailAccount.refreshToken!,
+            refreshToken: emailAccount.refreshToken,
+            password: emailAccount.password,
+            imapHost: emailAccount.imapHost,
+            imapPort: emailAccount.imapPort,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -234,8 +238,12 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailAccount.id,
             email: emailAccount.email,
+            provider: emailAccount.provider,
             clientId: emailAccount.clientId,
-            refreshToken: emailAccount.refreshToken!,
+            refreshToken: emailAccount.refreshToken,
+            password: emailAccount.password,
+            imapHost: emailAccount.imapHost,
+            imapPort: emailAccount.imapPort,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -324,8 +332,12 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailAccount.id,
             email: emailAccount.email,
+            provider: emailAccount.provider,
             clientId: emailAccount.clientId,
-            refreshToken: emailAccount.refreshToken!,
+            refreshToken: emailAccount.refreshToken,
+            password: emailAccount.password,
+            imapHost: emailAccount.imapHost,
+            imapPort: emailAccount.imapPort,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -392,8 +404,12 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         const credentials = {
             id: emailAccount.id,
             email: emailAccount.email,
+            provider: emailAccount.provider,
             clientId: emailAccount.clientId,
-            refreshToken: emailAccount.refreshToken!,
+            refreshToken: emailAccount.refreshToken,
+            password: emailAccount.password,
+            imapHost: emailAccount.imapHost,
+            imapPort: emailAccount.imapPort,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };

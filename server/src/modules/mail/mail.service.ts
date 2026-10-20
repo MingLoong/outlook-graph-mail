@@ -4,6 +4,7 @@ import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
 import { setCache, getCache } from '../../lib/redis.js';
 import { proxyFetch } from '../../lib/proxy.js';
+import { getImapFolderCandidates, getProviderConfig } from './providers.js';
 import prisma from '../../lib/prisma.js';
 import type { MailRequestInput } from './mail.schema.js';
 import Imap from 'node-imap';
@@ -14,8 +15,12 @@ type MailFetchStrategy = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONL
 interface Credentials {
     id: number;
     email: string;
-    clientId: string;
-    refreshToken: string;
+    provider?: string | null;
+    clientId?: string | null;
+    refreshToken?: string | null;
+    password?: string | null;
+    imapHost?: string | null;
+    imapPort?: number | null;
     autoAssigned: boolean;
     fetchStrategy?: MailFetchStrategy;
 }
@@ -60,6 +65,10 @@ function getErrorMessage(error: unknown): string {
     }
     const message = (error as { message?: unknown }).message;
     return typeof message === 'string' && message.trim() ? message : 'Unknown error';
+}
+
+function isOutlookProvider(credentials: Credentials): boolean {
+    return (credentials.provider || 'outlook').toLowerCase() === 'outlook';
 }
 
 export const mailService = {
@@ -152,6 +161,11 @@ export const mailService = {
         credentials: Credentials,
         proxyConfig?: { socks5?: string; http?: string }
     ): Promise<{ accessToken: string; hasMailRead: boolean } | null> {
+        if (!credentials.refreshToken || !credentials.clientId) {
+            logger.warn({ email: credentials.email }, 'Missing refresh token or clientId for Graph API');
+            return null;
+        }
+
         const cacheKey = `graph_api_access_token_${credentials.email}`;
 
         // 尝试从缓存获取（缓存的 token 一定有 Mail.Read 权限）
@@ -271,6 +285,11 @@ export const mailService = {
         credentials: Credentials,
         proxyConfig?: { socks5?: string; http?: string }
     ): Promise<string | null> {
+        if (!credentials.refreshToken || !credentials.clientId) {
+            logger.warn({ email: credentials.email }, 'Missing refresh token or clientId for IMAP token');
+            return null;
+        }
+
         const cacheKey = `imap_api_access_token_${credentials.email}`;
 
         const cachedToken = await getCache(cacheKey);
@@ -329,7 +348,7 @@ export const mailService = {
     },
 
     /**
-     * 使用 IMAP 获取邮件
+     * 使用 IMAP 获取邮件（Outlook OAuth XOAUTH2 模式）
      */
     async getEmailsViaImap(
         email: string,
@@ -447,7 +466,157 @@ export const mailService = {
     },
 
     /**
-     * 获取邮件（主入口）- 支持 Graph API 和 IMAP 回退
+     * 使用通用 IMAP（密码/授权码模式）获取邮件
+     * 支持 Gmail / QQ / 163 / 126 / Yahoo / 阿里云 / 自定义 IMAP
+     */
+    async getEmailsViaGenericImap(
+        credentials: Credentials,
+        mailbox: string = 'INBOX',
+        limit: number = 100
+    ): Promise<EmailMessage[]> {
+        const providerKey = (credentials.provider || 'custom').toLowerCase();
+        const providerConfig = getProviderConfig(providerKey);
+        const host = credentials.imapHost || providerConfig?.imapHost;
+        const port = credentials.imapPort || providerConfig?.imapPort || 993;
+        const password = credentials.password;
+
+        if (!password) {
+            throw new AppError('IMAP_PASSWORD_MISSING', 'IMAP password/authorization code is required for this mailbox', 400);
+        }
+        if (!host) {
+            throw new AppError('IMAP_HOST_MISSING', 'IMAP host is required for this mailbox', 400);
+        }
+
+        return new Promise((resolve, reject) => {
+            const imapConfig: ConstructorParameters<typeof Imap>[0] = {
+                user: credentials.email,
+                password,
+                host,
+                port,
+                tls: true,
+                tlsOptions: {
+                    rejectUnauthorized: false,
+                },
+            };
+            const imap = new Imap(imapConfig);
+
+            const emailList: EmailMessage[] = [];
+            let messageCount = 0;
+            let processedCount = 0;
+
+            imap.once('ready', async () => {
+                try {
+                    // 不同提供商的垃圾箱/已删除文件夹名不同，按候选列表尝试
+                    const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
+                    let opened = false;
+                    for (const candidate of folderCandidates) {
+                        try {
+                            await new Promise<void>((res, rej) => {
+                                imap.openBox(candidate, true, (err) => {
+                                    if (err) return rej(err);
+                                    res();
+                                });
+                            });
+                            opened = true;
+                            break;
+                        } catch {
+                            // 尝试下一个候选文件夹
+                        }
+                    }
+
+                    if (!opened) {
+                        // 所有候选都失败，最后用原始 mailbox 名尝试
+                        await new Promise<void>((res, rej) => {
+                            imap.openBox(mailbox, true, (err) => {
+                                if (err) return rej(err);
+                                res();
+                            });
+                        });
+                    }
+
+                    imap.search(['ALL'], (err: Error | null, results: number[]) => {
+                        if (err) {
+                            imap.end();
+                            return reject(err);
+                        }
+
+                        if (!results || results.length === 0) {
+                            imap.end();
+                            return resolve([]);
+                        }
+
+                        const limitedResults = results.slice(-limit);
+                        messageCount = limitedResults.length;
+
+                        const f = imap.fetch(limitedResults, { bodies: '' });
+
+                        f.on('message', (msg) => {
+                            msg.on('body', (stream) => {
+                                simpleParser(stream as unknown as Source)
+                                    .then((mail: ParsedMail) => {
+                                        const html = typeof mail.html === 'string' ? mail.html : '';
+                                        emailList.push({
+                                            id: `imap_${Date.now()}_${processedCount}`,
+                                            from: mail.from?.text || '',
+                                            subject: mail.subject || '',
+                                            text: mail.text || '',
+                                            html,
+                                            date: mail.date?.toISOString() || '',
+                                        });
+                                    })
+                                    .catch((parseErr: Error) => {
+                                        logger.error({ parseErr }, 'Error parsing email');
+                                    })
+                                    .finally(() => {
+                                        processedCount++;
+                                        if (processedCount === messageCount) {
+                                            imap.end();
+                                        }
+                                    });
+                            });
+                        });
+
+                        f.once('error', (fetchErr: Error) => {
+                            logger.error({ fetchErr }, 'Generic IMAP fetch error');
+                            imap.end();
+                            reject(fetchErr);
+                        });
+
+                        f.once('end', () => {
+                            if (messageCount === 0) {
+                                imap.end();
+                            }
+                        });
+                    });
+                } catch (err) {
+                    imap.end();
+                    reject(err);
+                }
+            });
+
+            imap.once('error', (err: Error) => {
+                logger.error({ err, host, provider: providerKey }, 'Generic IMAP connection error');
+                reject(err);
+            });
+
+            imap.once('end', () => {
+                logger.debug({ email: credentials.email, host }, 'Generic IMAP connection ended');
+                emailList.sort((a: EmailMessage, b: EmailMessage) => {
+                    const dateA = a.date ? new Date(a.date).getTime() : 0;
+                    const dateB = b.date ? new Date(b.date).getTime() : 0;
+                    return dateB - dateA;
+                });
+                resolve(emailList);
+            });
+
+            imap.connect();
+        });
+    },
+
+    /**
+     * 获取邮件（主入口）
+     * - Outlook 账号：Graph API + IMAP XOAUTH2 回退（按分组策略）
+     * - 第三方 IMAP 邮箱：密码/授权码直连
      */
     async getEmails(
         credentials: Credentials,
@@ -456,6 +625,19 @@ export const mailService = {
         const proxyConfig = { socks5: options.socks5, http: options.http };
         const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
         const limit = options.limit || 100;
+
+        // 第三方 IMAP 邮箱：直接使用密码收信
+        if (!isOutlookProvider(credentials)) {
+            logger.info({ email: credentials.email, provider: credentials.provider }, 'Using generic IMAP for email retrieval');
+            const messages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit);
+            return {
+                email: credentials.email,
+                mailbox: options.mailbox,
+                count: messages.length,
+                messages,
+                method: 'imap',
+            };
+        }
 
         const fetchViaGraph = async () => {
             const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
@@ -533,12 +715,20 @@ export const mailService = {
     },
 
     /**
-     * 清空邮箱（通过 Graph API 删除所有邮件）
+     * 清空邮箱（通过 Graph API 删除所有邮件，仅支持 Outlook 账号）
      */
     async processMailbox(
         credentials: Credentials,
         options: { mailbox: string; socks5?: string; http?: string }
     ) {
+        if (!isOutlookProvider(credentials)) {
+            throw new AppError(
+                'MAILBOX_CLEAR_UNSUPPORTED',
+                'Mailbox clear is only supported for Outlook accounts (Graph API)',
+                400
+            );
+        }
+
         const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
         if (strategy === 'IMAP_ONLY') {
             throw new AppError(
