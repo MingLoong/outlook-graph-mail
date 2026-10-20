@@ -71,6 +71,38 @@ function isOutlookProvider(credentials: Credentials): boolean {
     return (credentials.provider || 'outlook').toLowerCase() === 'outlook';
 }
 
+/**
+ * 将第三方 IMAP 的原始报错转成带排查提示的应用错误
+ */
+function normalizeImapError(err: unknown, provider: string, host: string): AppError {
+    const raw = getErrorMessage(err);
+    const providerKey = (provider || '').toLowerCase();
+    const lowered = raw.toLowerCase();
+    const isAuthError =
+        lowered.includes('authentication') ||
+        lowered.includes('login fail') ||
+        lowered.includes('invalid credentials') ||
+        lowered.includes('auth') ||
+        lowered.includes('password');
+
+    if (!isAuthError) {
+        return new AppError('IMAP_ERROR', `IMAP 收取失败（${host}）：${raw}`, 502);
+    }
+
+    let hint = '请检查密码/授权码是否正确，并确认邮箱已开启 IMAP 服务';
+    if (providerKey === 'gmail') {
+        hint = 'Gmail 通常需要「应用专用密码」（非登录密码），并需在 Gmail 设置中开启 IMAP';
+    } else if (providerKey === 'qq' || providerKey === '163' || providerKey === '126') {
+        hint = '请在邮箱设置中开启 IMAP 服务，并使用生成的授权码（非登录密码）';
+    } else if (providerKey === 'yahoo') {
+        hint = '请使用 Yahoo 账户安全设置中生成的应用密码';
+    } else if (providerKey === 'aliyun') {
+        hint = '请使用阿里邮箱登录密码或授权码，并确认已开启 IMAP 服务';
+    }
+
+    return new AppError('IMAP_AUTH_FAILED', `IMAP 认证失败（${host}）：${hint}`, 502);
+}
+
 export const mailService = {
     /**
      * 解析凭证
@@ -590,13 +622,13 @@ export const mailService = {
                     });
                 } catch (err) {
                     imap.end();
-                    reject(err);
+                    reject(normalizeImapError(err, providerKey, host));
                 }
             });
 
             imap.once('error', (err: Error) => {
                 logger.error({ err, host, provider: providerKey }, 'Generic IMAP connection error');
-                reject(err);
+                reject(normalizeImapError(err, providerKey, host));
             });
 
             imap.once('end', () => {
