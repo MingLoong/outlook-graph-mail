@@ -548,6 +548,55 @@ export const mailService = {
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
 
+            let settled = false;
+            // 全局总超时：比前端 90s 略短，避免 axios 先报 "[500] timeout of 30000ms exceeded"
+            const totalTimeoutMs = 75000;
+            const watchdog = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                logger.warn({ email: credentials.email, host, port, totalTimeoutMs }, 'Generic IMAP watchdog timeout');
+                // 强制销毁底层 socket，避免静默挂起的连接泄漏
+                const internals = imap as unknown as {
+                    destroy?: () => void;
+                    _sock?: { destroy?: () => void };
+                };
+                try {
+                    internals._sock?.destroy?.();
+                } catch {
+                    // ignore
+                }
+                try {
+                    internals.destroy?.();
+                } catch {
+                    // ignore
+                }
+                try {
+                    imap.end();
+                } catch {
+                    // ignore
+                }
+                reject(
+                    new AppError(
+                        'IMAP_TIMEOUT',
+                        `IMAP 总超时（${host}:${port}）超过 ${Math.round(totalTimeoutMs / 1000)} 秒，连接或读取长时间无响应。若服务器在海外，建议配置代理后再试`,
+                        504
+                    )
+                );
+            }, totalTimeoutMs);
+
+            const finishResolve = (value: EmailMessage[]) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(watchdog);
+                resolve(value);
+            };
+            const finishReject = (err: unknown) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(watchdog);
+                reject(err);
+            };
+
             const emailList: EmailMessage[] = [];
             let messageCount = 0;
             let processedCount = 0;
@@ -585,12 +634,12 @@ export const mailService = {
                     imap.search(['ALL'], (err: Error | null, results: number[]) => {
                         if (err) {
                             imap.end();
-                            return reject(err);
+                            return finishReject(err);
                         }
 
                         if (!results || results.length === 0) {
                             imap.end();
-                            return resolve([]);
+                            return finishResolve([]);
                         }
 
                         const limitedResults = results.slice(-limit);
@@ -627,7 +676,7 @@ export const mailService = {
                         f.once('error', (fetchErr: Error) => {
                             logger.error({ fetchErr }, 'Generic IMAP fetch error');
                             imap.end();
-                            reject(fetchErr);
+                            finishReject(fetchErr);
                         });
 
                         f.once('end', () => {
@@ -638,13 +687,13 @@ export const mailService = {
                     });
                 } catch (err) {
                     imap.end();
-                    reject(normalizeImapError(err, providerKey, host, port));
+                    finishReject(normalizeImapError(err, providerKey, host, port));
                 }
             });
 
             imap.once('error', (err: Error) => {
                 logger.error({ err, host, provider: providerKey }, 'Generic IMAP connection error');
-                reject(normalizeImapError(err, providerKey, host, port));
+                finishReject(normalizeImapError(err, providerKey, host, port));
             });
 
             imap.once('end', () => {
@@ -654,7 +703,7 @@ export const mailService = {
                     const dateB = b.date ? new Date(b.date).getTime() : 0;
                     return dateB - dateA;
                 });
-                resolve(emailList);
+                finishResolve(emailList);
             });
 
             imap.connect();
