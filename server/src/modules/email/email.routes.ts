@@ -131,6 +131,27 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
         }, '导出邮箱');
         return { success: true, data: { content } };
     });
+    // 列出该账号可用邮件文件夹（面板文件夹选择器）
+    fastify.get('/:id/folders', async (request) => {
+        const { id } = request.params as { id: string };
+        const emailData = await emailService.getById(parseInt(id), true);
+        const credentials = {
+            id: emailData.id,
+            email: emailData.email,
+            provider: emailData.provider,
+            clientId: emailData.clientId,
+            refreshToken: emailData.refreshToken,
+            password: emailData.password,
+            imapHost: emailData.imapHost,
+            imapPort: emailData.imapPort,
+            proxyId: emailData.proxyId,
+            autoAssigned: false,
+            fetchStrategy: emailData.group?.fetchStrategy,
+        };
+        const folders = await mailService.listFolders(credentials);
+        return { success: true, data: folders };
+    });
+
 
     // 查看邮件 (管理员专用)
     fastify.get('/:id/mails', async (request) => {
@@ -175,7 +196,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             cacheTtlSeconds: env.MAIL_CACHE_TTL_PANEL_SECONDS,
             headersOnly,
             // 默认合并垃圾箱（?junk=0 可关闭）
-            includeJunk: junk !== '0' && junk !== 'false',        });
+            includeJunk: junk !== '0' && junk !== 'false' && (!mailbox || mailbox.toUpperCase() === 'INBOX'),        });
         await emailService.touchLastCheckAt(emailData.id);
         return { success: true, data: mails };
     });

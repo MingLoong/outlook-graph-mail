@@ -664,6 +664,56 @@ export const mailService = {
      * sync 存在且 UIDVALIDITY 一致时走 UID 增量抓取（只拉新邮件）；
      * onMeta 回传本次抓取的同步元数据，供缓存层写入。
      */
+    /** 列出账号可用的 IMAP 文件夹及邮件数（面板文件夹选择器用） */
+    async listFolders(credentials: Credentials, imapEndpoint?: ImapEndpoint): Promise<Array<{ path: string; name: string; count: number; special?: string }>> {
+        const providerKey = (credentials.provider || 'custom').toLowerCase();
+        const providerConfig = getProviderConfig(providerKey);
+        const host = credentials.imapHost || providerConfig?.imapHost;
+        const port = credentials.imapPort || providerConfig?.imapPort || 993;
+        const password = credentials.password;
+        if (!host || !password) {
+            throw new AppError('IMAP_CREDENTIALS_MISSING', '缺少 IMAP 地址或密码', 400);
+        }
+        const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
+        const client = new ImapFlow({
+            host: endpoint.host,
+            port: endpoint.port,
+            secure: true,
+            auth: { user: credentials.email, pass: password },
+            tls: { servername: endpoint.servername, rejectUnauthorized: false },
+            logger: false,
+            clientInfo: { name: 'GongXiMail', version: '2.0.0', vendor: 'gongxi-mail' },
+            greetingTimeout: 25000,
+            socketTimeout: endpoint.tunneled ? 45000 : 30000,
+            disableAutoIdle: true,
+        });
+        const out: Array<{ path: string; name: string; count: number; special?: string }> = [];
+        try {
+            await client.connect();
+            const list = await client.list();
+            for (const box of list) {
+                let count = 0;
+                try {
+                    const lock = await client.getMailboxLock(box.path);
+                    count = client.mailbox ? client.mailbox.exists : 0;
+                    lock.release();
+                } catch {
+                    count = -1;
+                }
+                out.push({ path: box.path, name: box.name || box.path, count, special: box.specialUse || undefined });
+            }
+            return out;
+        } catch (err) {
+            throw normalizeImapError(err, providerKey, host, port);
+        } finally {
+            try {
+                client.close();
+            } catch {
+                // ignore
+            }
+        }
+    },
+
     /** 用 imapflow 抓取邮件（兼容阿里企业邮 / 139 等 node-imap 无法完成握手的服务器） */
     async getEmailsViaImapflow(
         credentials: Credentials,

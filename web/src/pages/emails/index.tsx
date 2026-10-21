@@ -194,6 +194,7 @@ const EmailsPage: React.FC = () => {
     const [currentEmail, setCurrentEmail] = useState<string>('');
     const [currentEmailId, setCurrentEmailId] = useState<number | null>(null);
     const [currentMailbox, setCurrentMailbox] = useState<string>('INBOX');
+    const [mailFolders, setMailFolders] = useState<Array<{ path: string; name: string; count: number }>>([]);
     const [emailDetailVisible, setEmailDetailVisible] = useState(false);
     const [emailDetailContent, setEmailDetailContent] = useState<string>('');
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
@@ -503,6 +504,14 @@ const EmailsPage: React.FC = () => {
         setCurrentEmail(record.email);
         setCurrentEmailId(record.id);
         setCurrentMailbox(mailbox);
+        void (async () => {
+            try {
+                const res = await emailApi.listFolders<{ path: string; name: string; count: number }>(record.id);
+                setMailFolders(res.data || []);
+            } catch {
+                setMailFolders([]);
+            }
+        })();
         setMailModalVisible(true);
         setMailCacheInfo({ cached: false });
         await loadMails(record.id, mailbox);
@@ -1289,7 +1298,7 @@ const EmailsPage: React.FC = () => {
             {/* 邮件列表 Modal */}
             {mailModalVisible && (
                 <Modal
-                    title={`${currentEmail} 的${currentMailbox === 'INBOX' ? '收件箱' : '垃圾箱'}`}
+                    title={`${currentEmail} · ${mailFolders.find((f) => f.path === currentMailbox)?.name || (currentMailbox === 'INBOX' ? '收件箱' : currentMailbox)}`}
                     open={mailModalVisible}
                     onCancel={() => setMailModalVisible(false)}
                     footer={null}
@@ -1310,7 +1319,24 @@ const EmailsPage: React.FC = () => {
                         <span style={{ marginLeft: 16, color: '#888' }}>
                             共 {mailList.length} 封邮件
                         </span>
-                        <Space size={4} style={{ marginRight: 8 }}>
+                        {/* folderSelectAdded */}
+                    <Select
+                        size="small"
+                        style={{ width: 180, marginRight: 8 }}
+                        value={currentMailbox}
+                        onChange={(value: string) => {
+                            setCurrentMailbox(value);
+                            if (currentEmailId) {
+                                void loadMails(currentEmailId, value, { fresh: true });
+                            }
+                        }}
+                        options={
+                            mailFolders.length > 0
+                                ? mailFolders.map((f) => ({ value: f.path, label: `${f.name} (${f.count})` }))
+                                : [{ value: 'INBOX', label: 'INBOX' }, { value: 'junkemail', label: '垃圾箱' }]
+                        }
+                    />
+                    <Space size={4} style={{ marginRight: 8 }}>
                         <Typography.Text type="secondary" style={{ fontSize: 12 }}>包含垃圾箱</Typography.Text>
                         <Switch
                             size="small"

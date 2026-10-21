@@ -69,6 +69,14 @@ export const MAIL_PROVIDERS: Record<string, MailProvider> = {
     note: '使用阿里邮箱登录密码或授权码',
     authType: 'password',
   },
+  aliyunqiye: {
+    label: '阿里企业邮',
+    imapHost: 'imap.qiye.aliyun.com',
+    imapPort: 993,
+    accountType: 'imap',
+    note: '企业邮箱：使用完整邮箱地址 + 登录密码（或客户端专用密码）',
+    authType: 'password',
+  },
   custom: {
     label: '自定义 IMAP',
     imapHost: '',
@@ -151,6 +159,11 @@ export const PROVIDER_FOLDER_MAP: Record<string, Record<string, string[]>> = {
     junkemail: ['Junk', 'Spam'],
     deleteditems: ['Trash', 'Deleted Messages'],
   },
+  aliyunqiye: {
+    inbox: ['INBOX'],
+    junkemail: ['垃圾邮件', 'Junk', 'Spam'],
+    deleteditems: ['已删除', 'Trash', 'Deleted Messages'],
+  },
   _default: {
     inbox: ['INBOX'],
     junkemail: ['垃圾邮件', 'Junk', 'Junk Email', 'Spam', 'SPAM', 'Bulk Mail', '垃圾邮件'],
@@ -167,13 +180,22 @@ export function inferProviderFromEmail(email: string): string | undefined {
 
 export function getImapFolderCandidates(provider: string, folder: string): string[] {
   const providerKey = (provider || '').trim() || '_default';
-  const folderKey = (folder || '').trim().toLowerCase() || 'inbox';
+  const rawFolder = (folder || '').trim();
+  const folderKey = rawFolder.toLowerCase() || 'inbox';
   const folderMap = PROVIDER_FOLDER_MAP[providerKey] || PROVIDER_FOLDER_MAP._default;
-  return folderMap[folderKey] || PROVIDER_FOLDER_MAP._default[folderKey] || ['INBOX'];
+  const mapped = folderMap[folderKey] || PROVIDER_FOLDER_MAP._default[folderKey];
+  if (mapped) {
+    return mapped;
+  }
+  // literalFolder：把传入值当作真实 IMAP 路径（面板文件夹选择器）
+  if (rawFolder && folderKey !== 'inbox') {
+    return [rawFolder];
+  }
+  return ['INBOX'];
 }
 
 export function getProviderList() {
-  const order = ['auto', 'outlook', 'gmail', 'qq', '163', '126', 'yahoo', 'aliyun', 'custom'];
+  const order = ['auto', 'outlook', 'gmail', 'qq', '163', '126', 'yahoo', 'aliyun', 'aliyunqiye', 'custom'];
   const result: Array<{
     key: string;
     label: string;

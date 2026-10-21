@@ -475,6 +475,8 @@ export const apiKeyApi = {
 // ========================================
 
 export const emailApi = {
+    listFolders: <T = { path: string; name: string; count: number; special?: string }>(id: number) =>
+        requestGet<T[]>(`/admin/emails/${id}/folders`, { timeout: 60000 }),
     getList: <T = Record<string, unknown>>(params?: { page?: number; pageSize?: number; status?: string; provider?: string; keyword?: string; groupId?: number }) =>
         requestGet<ApiPagedList<T>>('/admin/emails', { params, cacheMs: 800 }),
 
