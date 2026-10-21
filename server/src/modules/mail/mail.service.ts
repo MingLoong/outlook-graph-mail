@@ -51,8 +51,46 @@ async function resolveImapEndpoint(
     return { host: local.host, port: local.port, tunneled: true };
 }
 
-/** 解析账号绑定的代理；任何异常都退化为直连，避免影响收信主流程 */
-async function safeResolveProxy(proxyId?: number | null): Promise<ProxyRuntime | null> {
+/**
+ * 网易（163/126）与 Yahoo 要求客户端在登录后上报 IMAP ID 信息（RFC 2971），
+ * 否则 SELECT/EXAMINE 阶段会直接返回 "Unsafe Login"。
+ * node-imap 不会自动发送，这里在 ready 后补发一次，失败不影响后续流程。
+ */
+async function ensureImapId(imap: Imap, provider?: string | null): Promise<void> {
+    const key = (provider || '').toLowerCase();
+    if (!['163', '126', 'yahoo'].includes(key)) {
+        return;
+    }
+    const client = imap as unknown as {
+        id?: (info: Record<string, string>, cb: (err: Error | null) => void) => void;
+    };
+    if (typeof client.id !== 'function') {
+        return;
+    }
+    await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 4000);
+        timer.unref?.();
+        const done = () => {
+            clearTimeout(timer);
+            resolve();
+        };
+        try {
+            client.id!(
+                {
+                    name: 'GongXiMail',
+                    version: '2.0.0',
+                    vendor: 'gongxi-mail',
+                    'support-email': 'support@gongxi.local',
+                },
+                () => done()
+            );
+        } catch {
+            done();
+        }
+    });
+}
+
+/** 解析账号绑定的代理；任何异常都退化为直连，避免影响收信主流程 */async function safeResolveProxy(proxyId?: number | null): Promise<ProxyRuntime | null> {
     if (!proxyId) {
         return null;
     }
@@ -656,6 +694,8 @@ export const mailService = {
 
             imap.once('ready', async () => {
                 try {
+                    // 网易/Yahoo 必须先上报 ID，否则 EXAMINE 会被拒绝（Unsafe Login）
+                    await ensureImapId(imap, providerKey);
                     // 不同提供商的垃圾箱/已删除文件夹名不同，按候选列表尝试
                     const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
                     let opened = false;
@@ -953,7 +993,8 @@ export const mailService = {
                 reject(err);
             };
 
-            imap.once('ready', () => {
+            imap.once('ready', async () => {
+                await ensureImapId(imap, providerKey);
                 imap.openBox(mailbox, true, (err) => {
                     if (err) {
                         imap.end();
