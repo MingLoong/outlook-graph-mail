@@ -441,15 +441,20 @@ export const mailService = {
                         const limitedResults = results.slice(-limit);
                         messageCount = limitedResults.length;
 
+                        // node-imap 不返回 UID，按 FETCH 响应顺序与请求的 UID 列表配对
+                        let fetchIndex = 0;
+
                         const f = imap.fetch(limitedResults, { bodies: '' });
 
                         f.on('message', (msg) => {
+                            const msgUid = limitedResults[fetchIndex];
+                            fetchIndex += 1;
                             msg.on('body', (stream) => {
                                 simpleParser(stream as unknown as Source)
                                     .then((mail: ParsedMail) => {
                                         const html = typeof mail.html === 'string' ? mail.html : '';
                                         emailList.push({
-                                            id: `imap_${Date.now()}_${processedCount}`,
+                                            id: msgUid ? `imap:${msgUid}` : `imap_${Date.now()}_${processedCount}`,
                                             from: mail.from?.text || '',
                                             subject: mail.subject || '',
                                             text: mail.text || '',
@@ -669,11 +674,15 @@ export const mailService = {
                         const limitedResults = results.slice(-limit);
                         messageCount = limitedResults.length;
 
+                        // node-imap 不返回 UID，按 FETCH 响应顺序与请求的 UID 列表配对
+                        let fetchIndex = 0;
+
                         // 仅取邮件头时只拉 HEADER，正文按需再取（首屏更快）
                         const f = imap.fetch(limitedResults, headersOnly ? { bodies: 'HEADER' } : { bodies: '' });
 
                         f.on('message', (msg) => {
-                            const msgUid = (msg as { uid?: number }).uid;
+                            const msgUid = limitedResults[fetchIndex];
+                            fetchIndex += 1;
                             msg.on('body', (stream) => {
                                 simpleParser(stream as unknown as Source)
                                     .then((mail: ParsedMail) => {
@@ -763,6 +772,14 @@ export const mailService = {
                 );
             }
             return this.fetchSingleMessageViaImap(credentials, mailbox, uid, { password: credentials.password || '' });
+        }
+
+        if (!isOutlookProvider(credentials)) {
+            throw new AppError(
+                'MESSAGE_ID_INVALID',
+                '邮件 ID 无效或已过期，请刷新列表后重试',
+                400
+            );
         }
 
         const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
@@ -974,7 +991,11 @@ export const mailService = {
             );
             if (cached) {
                 logger.debug({ email: credentials.email, mailbox: options.mailbox }, 'Mail served from cache');
-                return wrapResult(cached.messages, 'cache', true, cached.cachedAt);
+                // 邮件头模式不返回正文；并按 limit 截断
+                const messages = headersOnly
+                    ? cached.messages.map((m) => ({ ...m, text: '', html: '' }))
+                    : cached.messages;
+                return wrapResult(messages.slice(0, limit), 'cache', true, cached.cachedAt);
             }
         }
 
