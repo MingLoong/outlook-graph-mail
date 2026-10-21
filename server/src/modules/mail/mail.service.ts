@@ -1147,7 +1147,16 @@ export const mailService = {
             }
         }
 
-        const imapMatch = /^imap:(\d+)$/.exec(messageId);
+        // 垃圾箱邮件 id 形如 junk:imap:<uid>，正文需到 junkemail 文件夹取
+
+        const junkPrefix = messageId.startsWith('junk:');
+
+        const effectiveMailbox = junkPrefix ? 'junkemail' : mailbox;
+
+        const normalizedMessageId = junkPrefix ? messageId.slice(5) : messageId;
+
+
+        const imapMatch = /^imap:(\d+)$/.exec(normalizedMessageId);
         if (imapMatch) {
             const uid = parseInt(imapMatch[1], 10);
             // 走隧道时链路更脆弱，失败后重建连接重试一次再报错
@@ -1160,7 +1169,7 @@ export const mailService = {
                         }
                         return this.fetchSingleMessageViaImap(
                             credentials,
-                            mailbox,
+                            effectiveMailbox,
                             uid,
                             { xoauth2: this.generateAuthString(credentials.email, imapToken) },
                             endpoint
@@ -1168,7 +1177,7 @@ export const mailService = {
                     }
                     return this.fetchSingleMessageViaImap(
                         credentials,
-                        mailbox,
+                        effectiveMailbox,
                         uid,
                         { password: credentials.password || '' },
                         endpoint
