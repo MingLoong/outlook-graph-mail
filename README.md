@@ -184,6 +184,10 @@ npm run test
 | ADMIN_2FA_WINDOW | TOTP 时间窗口（步长） | 1 |
 | API_LOG_RETENTION_DAYS | API 日志保留天数 | 30 |
 | API_LOG_CLEANUP_INTERVAL_MINUTES | API 日志清理间隔（分钟） | 60 |
+| MAIL_CACHE_TTL_API_SECONDS | 外部 API 邮件缓存 TTL（秒，0=禁用读缓存） | 60 |
+| MAIL_CACHE_TTL_PANEL_SECONDS | 管理面板邮件缓存 TTL（秒，0=禁用读缓存） | 180 |
+| MAIL_CACHE_RETENTION_DAYS | 邮件缓存保留天数（定时清理） | 7 |
+| MAIL_CACHE_CLEANUP_INTERVAL_MINUTES | 邮件缓存清理间隔（分钟） | 360 |
 
 ## 枚举约定
 
@@ -238,6 +242,22 @@ npm run test
 | Outlook | `邮箱----clientId----refreshToken` 或 `邮箱----密码----clientId----refreshToken` |
 | 第三方 IMAP | `邮箱----密码`（自定义 IMAP 为 `邮箱----密码----imap地址----imap端口`） |
 
+## 邮件缓存（PostgreSQL）
+
+每次请求都全量拉取并解析几十封邮件既慢又容易触发提供商风控（163/QQ 尤甚）。系统在 PostgreSQL 中缓存邮件，并对第三方 IMAP 使用 **UID 增量同步**：
+
+| 机制 | 说明 |
+|------|------|
+| 缓存命中 | TTL 内的重复请求直接返回缓存（毫秒级），不再连接邮件服务器 |
+| UID 增量 | 记录每账号每文件夹的 `UIDVALIDITY + lastUid`，后续只拉取新邮件；UIDVALIDITY 变化（邮箱重置等）自动整夹重建 |
+| 追平 | 增量抓取结果占满 limit 时自动触发一次全量拉取，避免遗漏较早邮件 |
+| 结果合并 | 增量新邮件与缓存行去重合并，按时间倒序取前 N，展示与调用方无感知 |
+| 强制刷新 | 管理面板「收取新邮件」按钮 / 外部 API `no_cache=1`：跳过缓存读取强制实时拉取（仍会写回缓存） |
+| 失效 | 清空邮箱、删除账号时自动清除对应缓存；缓存只在抓取成功时写入，失败不会污染 |
+| 清理 | 定时任务按 `MAIL_CACHE_RETENTION_DAYS` 清理过期缓存 |
+
+TTL 语义：**新邮件未入缓存，收验证码场景第一次查询必然真实拉取**；TTL 只影响"短时间内重复看同一收件箱"。可通过环境变量调整或设 0 禁用。
+
 ## API 文档
 
 ### 外部 API (`/api/*`)
@@ -287,6 +307,7 @@ npm run test
 | mailbox | 文件夹：inbox/junk |
 | socks5 | SOCKS5 代理 |
 | http | HTTP 代理 |
+| no_cache | 跳过缓存读取，强制实时拉取（1/true）。收验证码等需要第一时间拿到最新邮件的场景推荐用此参数；仍会刷新缓存。 |
 
 **`/api/mail_text` 专用参数**：
 | 参数 | 说明 |

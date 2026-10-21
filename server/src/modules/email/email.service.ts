@@ -2,6 +2,7 @@ import prisma from '../../lib/prisma.js';
 import { encrypt, decrypt } from '../../lib/crypto.js';
 import { AppError } from '../../plugins/error.js';
 import { inferProviderFromEmail, getProviderConfig } from '../mail/providers.js';
+import { mailCacheService } from '../mail/mail-cache.service.js';
 import type { Prisma } from '@prisma/client';
 import type { CreateEmailInput, UpdateEmailInput, ListEmailInput, ImportEmailInput } from './email.schema.js';
 
@@ -269,6 +270,7 @@ export const emailService = {
         }
 
         await prisma.emailAccount.delete({ where: { id } });
+        await mailCacheService.clearAccountCache(id);
         return { success: true };
     },
 
@@ -279,6 +281,9 @@ export const emailService = {
         await prisma.emailAccount.deleteMany({
             where: { id: { in: ids } },
         });
+        for (const id of ids) {
+            await mailCacheService.clearAccountCache(id);
+        }
         return { deleted: ids.length };
     },
 

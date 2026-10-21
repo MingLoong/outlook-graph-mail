@@ -5,8 +5,10 @@ import { logger } from '../../lib/logger.js';
 import { setCache, getCache } from '../../lib/redis.js';
 import { proxyFetch } from '../../lib/proxy.js';
 import { getImapFolderCandidates, getProviderConfig } from './providers.js';
+import { mailCacheService } from './mail-cache.service.js';
 import prisma from '../../lib/prisma.js';
 import type { MailRequestInput } from './mail.schema.js';
+import type { EmailMessage, ImapFetchMeta } from './mail.types.js';
 import Imap from 'node-imap';
 import { simpleParser, type ParsedMail, type Source } from 'mailparser';
 
@@ -23,15 +25,6 @@ interface Credentials {
     imapPort?: number | null;
     autoAssigned: boolean;
     fetchStrategy?: MailFetchStrategy;
-}
-
-interface EmailMessage {
-    id: string;
-    from: string;
-    subject: string;
-    text: string;
-    html: string;
-    date: string;
 }
 
 interface OAuthTokenResponse {
@@ -512,11 +505,15 @@ export const mailService = {
     /**
      * 使用通用 IMAP（密码/授权码模式）获取邮件
      * 支持 Gmail / QQ / 163 / 126 / Yahoo / 阿里云 / 自定义 IMAP
+     * sync 存在且 UIDVALIDITY 一致时走 UID 增量抓取（只拉新邮件）；
+     * onMeta 回传本次抓取的同步元数据，供缓存层写入。
      */
     async getEmailsViaGenericImap(
         credentials: Credentials,
         mailbox: string = 'INBOX',
-        limit: number = 100
+        limit: number = 100,
+        sync?: { uidValidity: number; lastUid: number } | null,
+        onMeta?: (meta: ImapFetchMeta) => void
     ): Promise<EmailMessage[]> {
         const providerKey = (credentials.provider || 'custom').toLowerCase();
         const providerConfig = getProviderConfig(providerKey);
@@ -606,11 +603,13 @@ export const mailService = {
                     // 不同提供商的垃圾箱/已删除文件夹名不同，按候选列表尝试
                     const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
                     let opened = false;
+                    let folderUidValidity: number | undefined;
                     for (const candidate of folderCandidates) {
                         try {
                             await new Promise<void>((res, rej) => {
-                                imap.openBox(candidate, true, (err) => {
+                                imap.openBox(candidate, true, (err, box) => {
                                     if (err) return rej(err);
+                                    folderUidValidity = typeof box?.uidvalidity === 'number' ? box.uidvalidity : undefined;
                                     res();
                                 });
                             });
@@ -624,22 +623,40 @@ export const mailService = {
                     if (!opened) {
                         // 所有候选都失败，最后用原始 mailbox 名尝试
                         await new Promise<void>((res, rej) => {
-                            imap.openBox(mailbox, true, (err) => {
+                            imap.openBox(mailbox, true, (err, box) => {
                                 if (err) return rej(err);
+                                folderUidValidity = typeof box?.uidvalidity === 'number' ? box.uidvalidity : undefined;
                                 res();
                             });
                         });
                     }
 
-                    imap.search(['ALL'], (err: Error | null, results: number[]) => {
+                    // 增量：同步游标有效时只搜索新 UID，否则全量
+                    const syncLastUid = sync?.lastUid ?? 0;
+                    const useIncremental =
+                        typeof sync === 'object' &&
+                        sync !== null &&
+                        typeof folderUidValidity === 'number' &&
+                        sync.uidValidity === folderUidValidity &&
+                        syncLastUid > 0;
+
+                    imap.search(useIncremental ? [['UID', `${syncLastUid + 1}:*`]] : ['ALL'], (err: Error | null, results: number[]) => {
                         if (err) {
                             imap.end();
                             return finishReject(err);
                         }
 
                         if (!results || results.length === 0) {
+                            // 即使没有新邮件也推进同步游标
+                            if (onMeta) {
+                                onMeta({ uidValidity: folderUidValidity, uids: [], full: !useIncremental });
+                            }
                             imap.end();
                             return finishResolve([]);
+                        }
+
+                        if (onMeta) {
+                            onMeta({ uidValidity: folderUidValidity, uids: results, full: !useIncremental });
                         }
 
                         const limitedResults = results.slice(-limit);
@@ -648,12 +665,13 @@ export const mailService = {
                         const f = imap.fetch(limitedResults, { bodies: '' });
 
                         f.on('message', (msg) => {
+                            const msgUid = (msg as { uid?: number }).uid;
                             msg.on('body', (stream) => {
                                 simpleParser(stream as unknown as Source)
                                     .then((mail: ParsedMail) => {
                                         const html = typeof mail.html === 'string' ? mail.html : '';
                                         emailList.push({
-                                            id: `imap_${Date.now()}_${processedCount}`,
+                                            id: msgUid ? `imap:${msgUid}` : `imap_${Date.now()}_${processedCount}`,
                                             from: mail.from?.text || '',
                                             subject: mail.subject || '',
                                             text: mail.text || '',
@@ -713,27 +731,84 @@ export const mailService = {
     /**
      * 获取邮件（主入口）
      * - Outlook 账号：Graph API + IMAP XOAUTH2 回退（按分组策略）
-     * - 第三方 IMAP 邮箱：密码/授权码直连
+     * - 第三方 IMAP 邮箱：密码/授权码直连（UID 增量）
+     * - 缓存：TTL 内直接返回；过期则真实抓取并写回缓存；
+     *   fresh=true 强制真实拉取（仍会写缓存）
      */
     async getEmails(
         credentials: Credentials,
-        options: { mailbox: string; limit?: number; socks5?: string; http?: string }
+        options: {
+            mailbox: string;
+            limit?: number;
+            socks5?: string;
+            http?: string;
+            fresh?: boolean;
+            cacheTtlSeconds?: number;
+        }
     ) {
         const proxyConfig = { socks5: options.socks5, http: options.http };
         const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
         const limit = options.limit || 100;
+        const cacheTtl = options.cacheTtlSeconds ?? 0;
 
-        // 第三方 IMAP 邮箱：直接使用密码收信
+        const wrapResult = (messages: EmailMessage[], method: string, cached: boolean, cachedAt?: Date) => ({
+            email: credentials.email,
+            mailbox: options.mailbox,
+            count: messages.length,
+            messages,
+            method,
+            cached,
+            cachedAt: (cachedAt ?? new Date()).toISOString(),
+        });
+
+        // 读缓存：TTL 内直接返回
+        if (!options.fresh && cacheTtl > 0) {
+            const cached = await mailCacheService.getFreshCache(credentials.id, options.mailbox, cacheTtl);
+            if (cached) {
+                logger.debug({ email: credentials.email, mailbox: options.mailbox }, 'Mail served from cache');
+                return wrapResult(cached.messages, 'cache', true, cached.cachedAt);
+            }
+        }
+
+        // 写缓存：抓取成功后落库（内部吞错，不影响结果返回）
+        const persist = (messages: EmailMessage[], meta?: ImapFetchMeta) =>
+            mailCacheService.saveFetchResult(credentials.id, options.mailbox, messages, meta);
+
+        // 合并去重：新抓取结果优先，与缓存行合并后按时间倒序取前 limit
+        const mergeWithCache = async (fresh: EmailMessage[]): Promise<EmailMessage[]> => {
+            const cachedRows = await mailCacheService.getRecentMessages(credentials.id, options.mailbox, limit);
+            const merged = new Map<string, EmailMessage>();
+            for (const m of [...fresh, ...cachedRows]) {
+                if (!merged.has(m.id)) {
+                    merged.set(m.id, m);
+                }
+            }
+            return [...merged.values()]
+                .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+                .slice(0, limit);
+        };
+
+        // 第三方 IMAP 邮箱：直接使用密码收信（UID 增量 + 追平）
         if (!isOutlookProvider(credentials)) {
             logger.info({ email: credentials.email, provider: credentials.provider }, 'Using generic IMAP for email retrieval');
-            const messages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit);
-            return {
-                email: credentials.email,
-                mailbox: options.mailbox,
-                count: messages.length,
-                messages,
-                method: 'imap',
+
+            let fetchedMeta: ImapFetchMeta | undefined;
+            const onMeta = (meta: ImapFetchMeta) => {
+                fetchedMeta = meta;
             };
+            const sync = await mailCacheService.getSyncState(credentials.id, options.mailbox);
+            let freshMessages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit, sync, onMeta);
+
+            // 增量抓取把 limit 占满：可能有更早的未拉邮件，全量追平一次
+            if (sync && fetchedMeta?.full === false && freshMessages.length >= limit) {
+                logger.info({ email: credentials.email }, 'Incremental fetch hit limit, doing full catch-up');
+                fetchedMeta = undefined;
+                freshMessages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit, null, onMeta);
+            }
+
+            await persist(freshMessages, fetchedMeta);
+            const messages = await mergeWithCache(freshMessages);
+            return wrapResult(messages, 'imap', false);
         }
 
         const fetchViaGraph = async () => {
@@ -753,13 +828,8 @@ export const mailService = {
                 proxyConfig
             );
 
-            return {
-                email: credentials.email,
-                mailbox: options.mailbox,
-                count: messages.length,
-                messages,
-                method: 'graph_api',
-            };
+            await persist(messages);
+            return wrapResult(messages, 'graph_api', false);
         };
 
         const fetchViaImap = async () => {
@@ -777,13 +847,8 @@ export const mailService = {
                 limit
             );
 
-            return {
-                email: credentials.email,
-                mailbox: options.mailbox,
-                count: messages.length,
-                messages,
-                method: 'imap',
-            };
+            await persist(messages);
+            return wrapResult(messages, 'imap', false);
         };
 
         if (strategy === 'GRAPH_ONLY') {
@@ -877,6 +942,9 @@ export const mailService = {
                 page++;
             }
 
+            // 删除完成：清空该文件夹缓存与同步状态
+            await mailCacheService.clearFolder(credentials.id, options.mailbox);
+
             return {
                 email: credentials.email,
                 mailbox: options.mailbox,
@@ -887,6 +955,8 @@ export const mailService = {
 
         } catch (err: unknown) {
             logger.error({ err, email: credentials.email }, 'Error processing mailbox');
+            // 部分删除也会使缓存失效
+            await mailCacheService.clearFolder(credentials.id, options.mailbox);
             return {
                 email: credentials.email,
                 mailbox: options.mailbox,

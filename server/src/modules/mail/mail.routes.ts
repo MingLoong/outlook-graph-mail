@@ -5,6 +5,7 @@ import { emailService } from '../email/email.service.js';
 import { MAIL_LOG_ACTIONS } from './mail.actions.js';
 import { z } from 'zod';
 import { AppError } from '../../plugins/error.js';
+import { env } from '../../config/env.js';
 
 // 邮件请求 Schema
 const mailRequestSchema = z.object({
@@ -12,13 +13,20 @@ const mailRequestSchema = z.object({
     mailbox: z.string().default('inbox'),
     socks5: z.string().optional(),
     http: z.string().optional(),
+    // no_cache=1/true：跳过缓存读取，强制真实拉取（仍会刷新缓存）
+    no_cache: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 
 // 纯文本邮件请求 Schema
 const mailTextRequestSchema = z.object({
     email: z.string().email(),
     match: z.string().optional(), // 正则表达式 (可选)
+    no_cache: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
+
+function parseBoolParam(value: unknown): boolean {
+    return value === '1' || value === 'true' || value === 1 || value === true;
+}
 
 function getErrorStatusCode(err: unknown): number {
     if (!err || typeof err !== 'object') {
@@ -163,6 +171,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 limit: 1,
                 socks5: input.socks5,
                 http: input.http,
+                fresh: parseBoolParam(input.no_cache),
+                cacheTtlSeconds: env.MAIL_CACHE_TTL_API_SECONDS,
             });
 
             await mailService.updateEmailStatus(credentials.id, true);
@@ -252,6 +262,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             const result = await mailService.getEmails(credentials, {
                 mailbox: 'inbox',
                 limit: 1, // 只取最新一封
+                fresh: parseBoolParam(input.no_cache),
+                cacheTtlSeconds: env.MAIL_CACHE_TTL_API_SECONDS,
             });
 
             await mailService.updateEmailStatus(credentials.id, true);
@@ -347,6 +359,8 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 mailbox: input.mailbox,
                 socks5: input.socks5,
                 http: input.http,
+                fresh: parseBoolParam(input.no_cache),
+                cacheTtlSeconds: env.MAIL_CACHE_TTL_API_SECONDS,
             });
 
             await mailService.updateEmailStatus(credentials.id, true);

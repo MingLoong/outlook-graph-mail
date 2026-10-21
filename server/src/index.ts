@@ -4,17 +4,20 @@ import { logger } from './lib/logger.js';
 import prisma from './lib/prisma.js';
 import { startApiLogRetentionJob } from './jobs/api-log-retention.js';
 import { startTokenRefreshJob } from './jobs/token-refresh.js';
+import { startMailCacheCleanupJob } from './jobs/mail-cache-retention.js';
 
 async function main() {
     const app = await buildApp();
     let stopApiLogRetentionJob = () => {};
     let stopTokenRefreshJob = () => {};
+    let stopMailCacheCleanupJob = () => {};
 
     // 优雅关闭
     const shutdown = async () => {
         logger.info('Shutting down...');
         stopApiLogRetentionJob();
         stopTokenRefreshJob();
+        stopMailCacheCleanupJob();
         await app.close();
         await prisma.$disconnect();
         process.exit(0);
@@ -29,6 +32,7 @@ async function main() {
         logger.info('Database connected');
         stopApiLogRetentionJob = startApiLogRetentionJob();
         stopTokenRefreshJob = startTokenRefreshJob();
+        stopMailCacheCleanupJob = startMailCacheCleanupJob();
 
         // 启动服务器
         await app.listen({ port: env.PORT, host: '0.0.0.0' });

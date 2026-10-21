@@ -545,12 +545,15 @@ export const emailApi = {
             invalidatePrefixes: ['/admin/emails', '/admin/email-groups', '/admin/api-keys', '/admin/dashboard/stats'],
         }),
 
-    // 查看邮件 (管理员专用)
-    viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string) =>
-        requestGet<{ messages: T[] }>(`/admin/emails/${id}/mails`, {
-            params: { mailbox, limit: 50 },
-            timeout: 90000,
-        }),
+    // 查看邮件 (管理员专用)；fresh=true 强制真实拉取（跳过缓存读取）
+    viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string, opts?: { fresh?: boolean }) =>
+        requestGet<{ messages: T[]; cached?: boolean; cachedAt?: string; method?: string }>(
+            `/admin/emails/${id}/mails`,
+            {
+                params: { mailbox, limit: 50, fresh: opts?.fresh ? 1 : undefined },
+                timeout: 90000,
+            }
+        ),
 
     // 清空邮箱 (管理员专用)
     clearMailbox: (id: number, mailbox?: string) =>

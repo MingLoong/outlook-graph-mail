@@ -45,6 +45,12 @@ const envSchema = z.object({
     ),
     TOKEN_REFRESH_INTERVAL_HOURS: z.coerce.number().min(1).default(12),
     TOKEN_REFRESH_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(10),
+
+    // Mail cache (PostgreSQL). TTL 单位秒，0 = 禁用缓存
+    MAIL_CACHE_TTL_API_SECONDS: z.coerce.number().int().min(0).default(60),
+    MAIL_CACHE_TTL_PANEL_SECONDS: z.coerce.number().int().min(0).default(180),
+    MAIL_CACHE_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
+    MAIL_CACHE_CLEANUP_INTERVAL_MINUTES: z.coerce.number().int().min(15).default(360),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -151,6 +151,12 @@ interface MailItem {
     date: string;
 }
 
+interface MailListResult {
+    messages: MailItem[];
+    cached?: boolean;
+    cachedAt?: string;
+}
+
 interface EmailDetailsResult extends EmailAccount {
     clientId: string | null;
     refreshToken: string | null;
@@ -179,6 +185,7 @@ const EmailsPage: React.FC = () => {
     const [importProvider, setImportProvider] = useState<string>('auto');
     const [mailList, setMailList] = useState<MailItem[]>([]);
     const [mailLoading, setMailLoading] = useState(false);
+    const [mailCacheInfo, setMailCacheInfo] = useState<{ cached: boolean; cachedAt?: string }>({ cached: false });
     const [currentEmail, setCurrentEmail] = useState<string>('');
     const [currentEmailId, setCurrentEmailId] = useState<number | null>(null);
     const [currentMailbox, setCurrentMailbox] = useState<string>('INBOX');
@@ -448,16 +455,21 @@ const EmailsPage: React.FC = () => {
         }
     };
 
-    const loadMails = useCallback(async (emailId: number, mailbox: string, showSuccessToast: boolean = false) => {
+    const loadMails = useCallback(async (
+        emailId: number,
+        mailbox: string,
+        opts?: { showSuccessToast?: boolean; fresh?: boolean }
+    ) => {
         setMailLoading(true);
-        const result = await requestData<{ messages: MailItem[] }>(
-            () => emailApi.viewMails(emailId, mailbox),
+        const result = await requestData<MailListResult>(
+            () => emailApi.viewMails(emailId, mailbox, { fresh: opts?.fresh }),
             '获取邮件失败'
         );
         if (result) {
             setMailList(result.messages || []);
+            setMailCacheInfo({ cached: !!result.cached, cachedAt: result.cachedAt });
             fetchData();
-            if (showSuccessToast) {
+            if (opts?.showSuccessToast) {
                 message.success('刷新成功');
             }
         }
@@ -469,12 +481,14 @@ const EmailsPage: React.FC = () => {
         setCurrentEmailId(record.id);
         setCurrentMailbox(mailbox);
         setMailModalVisible(true);
+        setMailCacheInfo({ cached: false });
         await loadMails(record.id, mailbox);
     }, [loadMails]);
 
     const handleRefreshMails = async () => {
         if (!currentEmailId) return;
-        await loadMails(currentEmailId, currentMailbox, true);
+        // 「收取新邮件」= 强制真实拉取（跳过缓存读取，仍刷新缓存）
+        await loadMails(currentEmailId, currentMailbox, { showSuccessToast: true, fresh: true });
     };
 
     const handleClearMailbox = async () => {
@@ -1234,6 +1248,13 @@ const EmailsPage: React.FC = () => {
                         <span style={{ marginLeft: 16, color: '#888' }}>
                             共 {mailList.length} 封邮件
                         </span>
+                        {mailCacheInfo.cached && (
+                            <Tooltip title="短时间内重复打开使用缓存，点「收取新邮件」强制实时拉取">
+                                <Tag color="blue" style={{ marginLeft: 8 }}>
+                                    缓存 {mailCacheInfo.cachedAt ? dayjs(mailCacheInfo.cachedAt).format('HH:mm:ss') : ''}
+                                </Tag>
+                            </Tooltip>
+                        )}
                     </Space>
                     <List
                         loading={mailLoading}

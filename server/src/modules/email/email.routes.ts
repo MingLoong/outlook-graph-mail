@@ -6,6 +6,7 @@ import { createEmailSchema, updateEmailSchema, listEmailSchema, importEmailSchem
 import { getProviderList } from '../mail/providers.js';
 import { z } from 'zod';
 import { AppError } from '../../plugins/error.js';
+import { env } from '../../config/env.js';
 import { getTokenRefreshJobNextRunAt, refreshTokenRefreshJobSchedule } from '../../jobs/token-refresh.js';
 
 const emailRoutes: FastifyPluginAsync = async (fastify) => {
@@ -134,7 +135,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 查看邮件 (管理员专用)
     fastify.get('/:id/mails', async (request) => {
         const { id } = request.params as { id: string };
-        const { mailbox, limit } = request.query as { mailbox?: string; limit?: string };
+        const { mailbox, limit, fresh } = request.query as { mailbox?: string; limit?: string; fresh?: string };
 
         const emailData = await emailService.getById(parseInt(id), true);
 
@@ -159,6 +160,9 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
         const mails = await mailService.getEmails(credentials, {
             mailbox: mailbox || 'INBOX',
             limit: parsedLimit,
+            // fresh=1 强制真实拉取；否则 TTL 内命中缓存
+            fresh: fresh === '1' || fresh === 'true',
+            cacheTtlSeconds: env.MAIL_CACHE_TTL_PANEL_SECONDS,
         });
         await emailService.touchLastCheckAt(emailData.id);
         return { success: true, data: mails };

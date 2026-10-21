@@ -96,8 +96,50 @@ model EmailAccount {
   group   EmailGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
   usages  EmailUsage[]
   apiLogs ApiLog[]
+  mailCache      MailCache[]
+  mailSyncStates MailSyncState[]
 
   @@map("email_accounts")
+}
+
+// ============================================
+// 邮件缓存（PostgreSQL 存储，避免每次全量拉取）
+// ============================================
+model MailCache {
+  id        Int      @id @default(autoincrement())
+  accountId Int      @map("account_id")
+  mailbox   String   @default("INBOX") @db.VarChar(255)
+  messageId String   @map("message_id") @db.VarChar(255)
+  fromAddr  String   @map("from_addr") @db.Text
+  subject   String   @db.Text
+  textBody  String   @map("text_body") @db.Text
+  htmlBody  String   @map("html_body") @db.Text
+  mailDate  DateTime @map("mail_date")
+  cachedAt  DateTime @default(now()) @map("cached_at")
+
+  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, mailbox, messageId])
+  @@index([accountId, mailbox])
+  @@index([cachedAt])
+  @@map("mail_cache")
+}
+
+// ============================================
+// IMAP UID 增量同步状态
+// ============================================
+model MailSyncState {
+  id         Int      @id @default(autoincrement())
+  accountId  Int      @map("account_id")
+  mailbox    String   @db.VarChar(255)
+  uidValidity Int     @map("uid_validity")
+  lastUid    Int      @default(0) @map("last_uid")
+  lastSyncAt DateTime @default(now()) @map("last_sync_at")
+
+  account EmailAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, mailbox])
+  @@map("mail_sync_states")
 }
 
 // ============================================
