@@ -21,6 +21,8 @@ export interface ImapFetchMeta {
     uids?: number[];
     /** 全量替换文件夹缓存（而非增量补入） */
     full?: boolean;
+    /** 本次只抓取了邮件头（正文按需单独获取），缓存不覆盖带正文的行 */
+    headersOnly?: boolean;
 }
 
 export function normalizeMailboxName(mailbox: string): string {

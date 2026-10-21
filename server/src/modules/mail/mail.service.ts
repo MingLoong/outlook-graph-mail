@@ -268,7 +268,8 @@ export const mailService = {
         accessToken: string,
         mailbox: string,
         limit: number = 100,
-        proxyConfig?: { socks5?: string; http?: string }
+        proxyConfig?: { socks5?: string; http?: string },
+        headersOnly: boolean = false
     ): Promise<EmailMessage[]> {
         // 转换邮箱名称
         let folder = 'inbox';
@@ -278,9 +279,14 @@ export const mailService = {
             folder = 'inbox';
         }
 
+        // 仅取邮件头时排除 body 字段，响应体显著变小
+        const select = headersOnly
+            ? '&$select=id,subject,from,receivedDateTime,createdDateTime,bodyPreview'
+            : '';
+
         try {
             const response = await proxyFetch(
-                `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages?$top=${limit}&$orderby=receivedDateTime desc`,
+                `https://graph.microsoft.com/v1.0/me/mailFolders/${folder}/messages?$top=${limit}&$orderby=receivedDateTime desc${select}`,
                 {
                     method: 'GET',
                     headers: {
@@ -304,7 +310,7 @@ export const mailService = {
                 from: item.from?.emailAddress?.address || '',
                 subject: item.subject || '',
                 text: item.bodyPreview || '',
-                html: item.body?.content || '',
+                html: headersOnly ? '' : (item.body?.content || ''),
                 date: item.createdDateTime || '',
             }));
         } catch (err) {
@@ -513,7 +519,8 @@ export const mailService = {
         mailbox: string = 'INBOX',
         limit: number = 100,
         sync?: { uidValidity: number; lastUid: number } | null,
-        onMeta?: (meta: ImapFetchMeta) => void
+        onMeta?: (meta: ImapFetchMeta) => void,
+        headersOnly: boolean = false
     ): Promise<EmailMessage[]> {
         const providerKey = (credentials.provider || 'custom').toLowerCase();
         const providerConfig = getProviderConfig(providerKey);
@@ -662,7 +669,8 @@ export const mailService = {
                         const limitedResults = results.slice(-limit);
                         messageCount = limitedResults.length;
 
-                        const f = imap.fetch(limitedResults, { bodies: '' });
+                        // 仅取邮件头时只拉 HEADER，正文按需再取（首屏更快）
+                        const f = imap.fetch(limitedResults, headersOnly ? { bodies: 'HEADER' } : { bodies: '' });
 
                         f.on('message', (msg) => {
                             const msgUid = (msg as { uid?: number }).uid;
@@ -674,8 +682,8 @@ export const mailService = {
                                             id: msgUid ? `imap:${msgUid}` : `imap_${Date.now()}_${processedCount}`,
                                             from: mail.from?.text || '',
                                             subject: mail.subject || '',
-                                            text: mail.text || '',
-                                            html,
+                                            text: headersOnly ? '' : (mail.text || ''),
+                                            html: headersOnly ? '' : html,
                                             date: mail.date?.toISOString() || '',
                                         });
                                     })
@@ -729,6 +737,198 @@ export const mailService = {
     },
 
     /**
+     * 按需获取单封邮件正文（管理面板点「查看」时调用）
+     * - messageId 形如 imap:<uid>：走 IMAP 拉取该 UID 的正文
+     * - 其它（Graph 消息 ID）：走 Graph API 拉取正文
+     */
+    async getEmailBody(
+        credentials: Credentials,
+        mailbox: string,
+        messageId: string,
+        proxyConfig?: { socks5?: string; http?: string }
+    ): Promise<EmailMessage> {
+        const imapMatch = /^imap:(\d+)$/.exec(messageId);
+        if (imapMatch) {
+            const uid = parseInt(imapMatch[1], 10);
+            if (isOutlookProvider(credentials)) {
+                const imapToken = await this.getImapAccessToken(credentials, proxyConfig);
+                if (!imapToken) {
+                    throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
+                }
+                return this.fetchSingleMessageViaImap(
+                    credentials,
+                    mailbox,
+                    uid,
+                    { xoauth2: this.generateAuthString(credentials.email, imapToken) }
+                );
+            }
+            return this.fetchSingleMessageViaImap(credentials, mailbox, uid, { password: credentials.password || '' });
+        }
+
+        const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
+        if (!tokenResult) {
+            throw new AppError('GRAPH_TOKEN_FAILED', 'Failed to get Graph API access token', 502);
+        }
+        return this.getMessageBodyViaGraphApi(tokenResult.accessToken, messageId, proxyConfig);
+    },
+
+    /** IMAP 拉取单封邮件正文 */
+    async fetchSingleMessageViaImap(
+        credentials: Credentials,
+        mailbox: string,
+        uid: number,
+        auth: { password: string } | { xoauth2: string }
+    ): Promise<EmailMessage> {
+        const providerKey = (credentials.provider || 'custom').toLowerCase();
+        const providerConfig = getProviderConfig(providerKey);
+        const host = credentials.imapHost || providerConfig?.imapHost;
+        const port = credentials.imapPort || providerConfig?.imapPort || 993;
+
+        if (!host) {
+            throw new AppError('IMAP_HOST_MISSING', 'IMAP host is required for this mailbox', 400);
+        }
+        if ('password' in auth && !auth.password) {
+            throw new AppError('IMAP_PASSWORD_MISSING', 'IMAP password/authorization code is required for this mailbox', 400);
+        }
+
+        return new Promise((resolve, reject) => {
+            const base = {
+                user: credentials.email,
+                host,
+                port,
+                tls: true,
+                connTimeout: 15000,
+                socketTimeout: 30000,
+                tlsOptions: { rejectUnauthorized: false },
+            };
+            const imapConfig = (
+                'xoauth2' in auth
+                    ? { ...base, password: '', xoauth2: auth.xoauth2 }
+                    : { ...base, password: auth.password }
+            ) as ConstructorParameters<typeof Imap>[0];
+            const imap = new Imap(imapConfig);
+
+            let settled = false;
+            let result: EmailMessage | null = null;
+            const totalTimeoutMs = 30000;
+            const watchdog = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                const internals = imap as unknown as { _sock?: { destroy?: () => void } };
+                try {
+                    internals._sock?.destroy?.();
+                } catch {
+                    // ignore
+                }
+                reject(
+                    new AppError(
+                        'IMAP_TIMEOUT',
+                        `IMAP 读取邮件正文超时（${host}:${port}）：服务器无响应，请稍后重试或配置代理`,
+                        504
+                    )
+                );
+            }, totalTimeoutMs);
+
+            const finishResolve = (value: EmailMessage) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(watchdog);
+                resolve(value);
+            };
+            const finishReject = (err: unknown) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(watchdog);
+                reject(err);
+            };
+
+            imap.once('ready', () => {
+                imap.openBox(mailbox, true, (err) => {
+                    if (err) {
+                        imap.end();
+                        return finishReject(normalizeImapError(err, providerKey, host, port));
+                    }
+                    const f = imap.fetch(uid, { bodies: '' });
+                    f.on('message', (msg) => {
+                        msg.on('body', (stream) => {
+                            simpleParser(stream as unknown as Source)
+                                .then((mail: ParsedMail) => {
+                                    result = {
+                                        id: `imap:${uid}`,
+                                        from: mail.from?.text || '',
+                                        subject: mail.subject || '',
+                                        text: mail.text || '',
+                                        html: typeof mail.html === 'string' ? mail.html : '',
+                                        date: mail.date?.toISOString() || '',
+                                    };
+                                })
+                                .catch((parseErr: Error) => {
+                                    logger.error({ parseErr }, 'Error parsing email body');
+                                })
+                                .finally(() => {
+                                    imap.end();
+                                });
+                        });
+                    });
+                    f.once('error', (fetchErr: Error) => {
+                        imap.end();
+                        finishReject(normalizeImapError(fetchErr, providerKey, host, port));
+                    });
+                });
+            });
+
+            imap.once('error', (err: Error) => {
+                logger.error({ err, host, provider: providerKey }, 'IMAP single message error');
+                finishReject(normalizeImapError(err, providerKey, host, port));
+            });
+
+            imap.once('end', () => {
+                if (result) {
+                    finishResolve(result);
+                } else {
+                    finishReject(new AppError('MESSAGE_NOT_FOUND', `邮件不存在或已被删除（UID ${uid}）`, 404));
+                }
+            });
+
+            imap.connect();
+        });
+    },
+
+    /** Graph 拉取单封邮件正文 */
+    async getMessageBodyViaGraphApi(
+        accessToken: string,
+        messageId: string,
+        proxyConfig?: { socks5?: string; http?: string }
+    ): Promise<EmailMessage> {
+        const response = await proxyFetch(
+            `https://graph.microsoft.com/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=id,subject,from,receivedDateTime,createdDateTime,body,bodyPreview`,
+            {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+            },
+            proxyConfig
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new AppError('GRAPH_API_ERROR', `Graph API error: ${response.status} - ${errorText}`, 502);
+        }
+
+        const item = (await response.json()) as GraphMessage;
+        return {
+            id: item.id || messageId,
+            from: item.from?.emailAddress?.address || '',
+            subject: item.subject || '',
+            text: item.bodyPreview || '',
+            html: item.body?.content || '',
+            date: item.createdDateTime || '',
+        };
+    },
+
+    /**
      * 获取邮件（主入口）
      * - Outlook 账号：Graph API + IMAP XOAUTH2 回退（按分组策略）
      * - 第三方 IMAP 邮箱：密码/授权码直连（UID 增量）
@@ -744,12 +944,15 @@ export const mailService = {
             http?: string;
             fresh?: boolean;
             cacheTtlSeconds?: number;
+            /** 只取邮件头（不含正文），列表页秒开用 */
+            headersOnly?: boolean;
         }
     ) {
         const proxyConfig = { socks5: options.socks5, http: options.http };
         const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
         const limit = options.limit || 100;
         const cacheTtl = options.cacheTtlSeconds ?? 0;
+        const headersOnly = options.headersOnly === true;
 
         const wrapResult = (messages: EmailMessage[], method: string, cached: boolean, cachedAt?: Date) => ({
             email: credentials.email,
@@ -761,9 +964,14 @@ export const mailService = {
             cachedAt: (cachedAt ?? new Date()).toISOString(),
         });
 
-        // 读缓存：TTL 内直接返回
+        // 读缓存：TTL 内直接返回（需要正文的调用方只接受带正文的缓存行）
         if (!options.fresh && cacheTtl > 0) {
-            const cached = await mailCacheService.getFreshCache(credentials.id, options.mailbox, cacheTtl);
+            const cached = await mailCacheService.getFreshCache(
+                credentials.id,
+                options.mailbox,
+                cacheTtl,
+                { requireBody: !headersOnly }
+            );
             if (cached) {
                 logger.debug({ email: credentials.email, mailbox: options.mailbox }, 'Mail served from cache');
                 return wrapResult(cached.messages, 'cache', true, cached.cachedAt);
@@ -780,7 +988,7 @@ export const mailService = {
             const merged = new Map<string, EmailMessage>();
             for (const m of [...fresh, ...cachedRows]) {
                 if (!merged.has(m.id)) {
-                    merged.set(m.id, m);
+                    merged.set(m.id, headersOnly ? { ...m, text: '', html: '' } : m);
                 }
             }
             return [...merged.values()]
@@ -794,16 +1002,30 @@ export const mailService = {
 
             let fetchedMeta: ImapFetchMeta | undefined;
             const onMeta = (meta: ImapFetchMeta) => {
-                fetchedMeta = meta;
+                fetchedMeta = headersOnly ? { ...meta, headersOnly: true } : meta;
             };
             const sync = await mailCacheService.getSyncState(credentials.id, options.mailbox);
-            let freshMessages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit, sync, onMeta);
+            let freshMessages = await this.getEmailsViaGenericImap(
+                credentials,
+                options.mailbox,
+                limit,
+                sync,
+                onMeta,
+                headersOnly
+            );
 
             // 增量抓取把 limit 占满：可能有更早的未拉邮件，全量追平一次
             if (sync && fetchedMeta?.full === false && freshMessages.length >= limit) {
                 logger.info({ email: credentials.email }, 'Incremental fetch hit limit, doing full catch-up');
                 fetchedMeta = undefined;
-                freshMessages = await this.getEmailsViaGenericImap(credentials, options.mailbox, limit, null, onMeta);
+                freshMessages = await this.getEmailsViaGenericImap(
+                    credentials,
+                    options.mailbox,
+                    limit,
+                    null,
+                    onMeta,
+                    headersOnly
+                );
             }
 
             await persist(freshMessages, fetchedMeta);
@@ -825,10 +1047,11 @@ export const mailService = {
                 tokenResult.accessToken,
                 options.mailbox,
                 limit,
-                proxyConfig
+                proxyConfig,
+                headersOnly
             );
 
-            await persist(messages);
+            await persist(messages, headersOnly ? { headersOnly: true } : undefined);
             return wrapResult(messages, 'graph_api', false);
         };
 

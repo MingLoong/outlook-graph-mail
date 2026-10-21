@@ -41,11 +41,14 @@ function mapRowToMessage(row: MailCacheRow): CachedMessage {
 }
 
 export const mailCacheService = {
-    /** TTL 内的缓存命中则返回邮件列表，否则 null（miss/禁用） */
+    /** TTL 内的缓存命中则返回邮件列表，否则 null（miss/禁用）
+     *  opts.requireBody=true 时只接受带正文的缓存行（面板邮件头模式与 API 混用时的保护）
+     */
     async getFreshCache(
         accountId: number,
         mailbox: string,
-        ttlSeconds: number
+        ttlSeconds: number,
+        opts?: { requireBody?: boolean }
     ): Promise<FreshCacheResult | null> {
         if (ttlSeconds <= 0) {
             return null;
@@ -62,9 +65,15 @@ export const mailCacheService = {
         if (!isCacheFresh(rows[0].cachedAt, ttlSeconds)) {
             return null;
         }
+        const usable = opts?.requireBody
+            ? rows.filter((row) => (row.textBody && row.textBody.length > 0) || (row.htmlBody && row.htmlBody.length > 0))
+            : rows;
+        if (usable.length === 0) {
+            return null;
+        }
         return {
             cachedAt: rows[0].cachedAt,
-            messages: rows.map(mapRowToMessage),
+            messages: usable.map(mapRowToMessage),
         };
     },
 
@@ -107,34 +116,54 @@ export const mailCacheService = {
         const folder = normalizeMailboxName(mailbox);
         try {
             const hasImapMeta = typeof meta?.uidValidity === 'number';
+            const headersOnly = meta?.headersOnly === true;
             const fullReplace = !hasImapMeta || meta?.full === true;
 
-            if (fullReplace) {
-                await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
-            } else if (hasImapMeta) {
-                // 增量模式：UIDVALIDITY 变化则整个文件夹作废
-                const state = await prisma.mailSyncState.findUnique({
-                    where: { accountId_mailbox: { accountId, mailbox: folder } },
-                });
-                if (state && state.uidValidity !== meta?.uidValidity) {
-                    await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
+            if (headersOnly) {
+                // 只写邮件头：不删除已有行（保留已缓存正文），skipDuplicates 避免覆盖带正文的行
+                if (messages.length > 0) {
+                    await prisma.mailCache.createMany({
+                        data: messages.map((m) => ({
+                            accountId,
+                            mailbox: folder,
+                            messageId: m.id,
+                            fromAddr: m.from,
+                            subject: m.subject,
+                            textBody: m.text,
+                            htmlBody: m.html,
+                            mailDate: m.date ? new Date(m.date) : new Date(),
+                        })),
+                        skipDuplicates: true,
+                    });
                 }
-            }
+            } else {
+                if (fullReplace) {
+                    await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
+                } else if (hasImapMeta) {
+                    // 增量模式：UIDVALIDITY 变化则整个文件夹作废
+                    const state = await prisma.mailSyncState.findUnique({
+                        where: { accountId_mailbox: { accountId, mailbox: folder } },
+                    });
+                    if (state && state.uidValidity !== meta?.uidValidity) {
+                        await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
+                    }
+                }
 
-            if (messages.length > 0) {
-                await prisma.mailCache.createMany({
-                    data: messages.map((m) => ({
-                        accountId,
-                        mailbox: folder,
-                        messageId: m.id,
-                        fromAddr: m.from,
-                        subject: m.subject,
-                        textBody: m.text,
-                        htmlBody: m.html,
-                        mailDate: m.date ? new Date(m.date) : new Date(),
-                    })),
-                    skipDuplicates: true,
-                });
+                if (messages.length > 0) {
+                    await prisma.mailCache.createMany({
+                        data: messages.map((m) => ({
+                            accountId,
+                            mailbox: folder,
+                            messageId: m.id,
+                            fromAddr: m.from,
+                            subject: m.subject,
+                            textBody: m.text,
+                            htmlBody: m.html,
+                            mailDate: m.date ? new Date(m.date) : new Date(),
+                        })),
+                        skipDuplicates: true,
+                    });
+                }
             }
 
             if (hasImapMeta && typeof meta?.uidValidity === 'number') {

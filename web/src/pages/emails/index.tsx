@@ -192,6 +192,7 @@ const EmailsPage: React.FC = () => {
     const [emailDetailVisible, setEmailDetailVisible] = useState(false);
     const [emailDetailContent, setEmailDetailContent] = useState<string>('');
     const [emailDetailSubject, setEmailDetailSubject] = useState<string>('');
+    const [emailDetailLoading, setEmailDetailLoading] = useState(false);
     const [emailEditLoading, setEmailEditLoading] = useState(false);
     const [form] = Form.useForm();
     const watchedProvider = Form.useWatch('provider', form) as MailProviderKey | undefined;
@@ -462,7 +463,8 @@ const EmailsPage: React.FC = () => {
     ) => {
         setMailLoading(true);
         const result = await requestData<MailListResult>(
-            () => emailApi.viewMails(emailId, mailbox, { fresh: opts?.fresh }),
+            // 只取邮件头，首屏更快；正文在点「查看」时按需加载
+            () => emailApi.viewMails(emailId, mailbox, { fresh: opts?.fresh, headersOnly: true, limit: 20 }),
             '获取邮件失败'
         );
         if (result) {
@@ -547,10 +549,30 @@ const EmailsPage: React.FC = () => {
         }
     };
 
-    const handleViewEmailDetail = (record: MailItem) => {
+    const handleViewEmailDetail = async (record: MailItem) => {
         setEmailDetailSubject(record.subject || '无主题');
-        setEmailDetailContent(record.html || record.text || '无内容');
+        setEmailDetailContent('');
         setEmailDetailVisible(true);
+        if (!currentEmailId) {
+            return;
+        }
+        setEmailDetailLoading(true);
+        try {
+            const body = await requestData<{ html?: string; text?: string; subject?: string }>(
+                () => emailApi.viewMailBody(currentEmailId, record.id, currentMailbox),
+                '获取邮件正文失败'
+            );
+            if (body) {
+                if (body.subject) {
+                    setEmailDetailSubject(body.subject);
+                }
+                setEmailDetailContent(body.html || body.text || '无内容');
+            } else {
+                setEmailDetailContent('无内容');
+            }
+        } finally {
+            setEmailDetailLoading(false);
+        }
     };
 
     // ========================================
@@ -1313,18 +1335,20 @@ const EmailsPage: React.FC = () => {
                     width={900}
                     styles={{ body: { padding: '16px 24px' } }}
                 >
-                    <iframe
-                        title="email-content"
-                        sandbox="allow-same-origin"
-                        srcDoc={emailDetailSrcDoc}
-                        style={{
-                            width: '100%',
-                            height: 'calc(100vh - 300px)',
-                            border: '1px solid #eee',
-                            borderRadius: '8px',
-                            backgroundColor: '#fafafa',
-                        }}
-                    />
+                    <Spin spinning={emailDetailLoading} tip="正在加载邮件正文...">
+                        <iframe
+                            title="email-content"
+                            sandbox="allow-same-origin"
+                            srcDoc={emailDetailSrcDoc}
+                            style={{
+                                width: '100%',
+                                height: 'calc(100vh - 300px)',
+                                border: '1px solid #eee',
+                                borderRadius: '8px',
+                                backgroundColor: '#fafafa',
+                            }}
+                        />
+                    </Spin>
                 </Modal>
             )}
 

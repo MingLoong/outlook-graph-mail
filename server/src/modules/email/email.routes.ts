@@ -135,7 +135,12 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 查看邮件 (管理员专用)
     fastify.get('/:id/mails', async (request) => {
         const { id } = request.params as { id: string };
-        const { mailbox, limit, fresh } = request.query as { mailbox?: string; limit?: string; fresh?: string };
+        const { mailbox, limit, fresh, headers } = request.query as {
+            mailbox?: string;
+            limit?: string;
+            fresh?: string;
+            headers?: string;
+        };
 
         const emailData = await emailService.getById(parseInt(id), true);
 
@@ -157,15 +162,43 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             ? Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100)
             : undefined;
 
+        // headers=1 只取邮件头（首屏秒开），正文通过 /mails/:messageId 按需获取
+        const headersOnly = headers === '1' || headers === 'true';
+
         const mails = await mailService.getEmails(credentials, {
             mailbox: mailbox || 'INBOX',
             limit: parsedLimit,
             // fresh=1 强制真实拉取；否则 TTL 内命中缓存
             fresh: fresh === '1' || fresh === 'true',
             cacheTtlSeconds: env.MAIL_CACHE_TTL_PANEL_SECONDS,
+            headersOnly,
         });
         await emailService.touchLastCheckAt(emailData.id);
         return { success: true, data: mails };
+    });
+
+    // 查看单封邮件正文 (管理员专用，按需加载)
+    fastify.get('/:id/mails/:messageId', async (request) => {
+        const { id, messageId } = request.params as { id: string; messageId: string };
+        const { mailbox } = request.query as { mailbox?: string };
+
+        const emailData = await emailService.getById(parseInt(id), true);
+
+        const credentials = {
+            id: emailData.id,
+            email: emailData.email,
+            provider: emailData.provider,
+            clientId: emailData.clientId,
+            refreshToken: emailData.refreshToken,
+            password: emailData.password,
+            imapHost: emailData.imapHost,
+            imapPort: emailData.imapPort,
+            autoAssigned: false,
+            fetchStrategy: emailData.group?.fetchStrategy,
+        };
+
+        const body = await mailService.getEmailBody(credentials, mailbox || 'INBOX', messageId);
+        return { success: true, data: body };
     });
 
     // 清空邮箱 (管理员专用)

@@ -256,6 +256,17 @@ npm run test
 | 失效 | 清空邮箱、删除账号时自动清除对应缓存；缓存只在抓取成功时写入，失败不会污染 |
 | 清理 | 定时任务按 `MAIL_CACHE_RETENTION_DAYS` 清理过期缓存 |
 
+### 首屏只取邮件头 + 正文按需加载
+
+管理面板列表只拉取**邮件头**（发件人/主题/日期），首屏默认 20 封，响应体和服务器带宽都大幅降低：
+
+| 接口 | 说明 |
+|------|------|
+| `GET /admin/emails/:id/mails?mailbox=INBOX&limit=20&headers=1` | 只返回邮件头（不含正文），支持 `fresh=1` 强制实时 |
+| `GET /admin/emails/:id/mails/:messageId?mailbox=INBOX` | 按需拉取单封邮件正文（IMAP 按 UID、Graph 按消息 ID） |
+
+外部 API（`/api/mail_new`、`/api/mail_text` 等）仍然拉取完整正文，不受影响。
+
 TTL 语义：**新邮件未入缓存，收验证码场景第一次查询必然真实拉取**；TTL 只影响"短时间内重复看同一收件箱"。可通过环境变量调整或设 0 禁用。
 
 ## API 文档

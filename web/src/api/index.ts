@@ -546,14 +546,30 @@ export const emailApi = {
         }),
 
     // 查看邮件 (管理员专用)；fresh=true 强制真实拉取（跳过缓存读取）
-    viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string, opts?: { fresh?: boolean }) =>
+    viewMails: <T = Record<string, unknown>>(
+        id: number,
+        mailbox?: string,
+        opts?: { fresh?: boolean; headersOnly?: boolean; limit?: number }
+    ) =>
         requestGet<{ messages: T[]; cached?: boolean; cachedAt?: string; method?: string }>(
             `/admin/emails/${id}/mails`,
             {
-                params: { mailbox, limit: 50, fresh: opts?.fresh ? 1 : undefined },
+                params: {
+                    mailbox,
+                    limit: opts?.limit ?? 20,
+                    fresh: opts?.fresh ? 1 : undefined,
+                    headers: opts?.headersOnly ? 1 : undefined,
+                },
                 timeout: 90000,
             }
         ),
+
+    // 查看单封邮件正文 (按需加载)
+    viewMailBody: <T = Record<string, unknown>>(id: number, messageId: string, mailbox?: string) =>
+        requestGet<T>(`/admin/emails/${id}/mails/${encodeURIComponent(messageId)}`, {
+            params: { mailbox },
+            timeout: 60000,
+        }),
 
     // 清空邮箱 (管理员专用)
     clearMailbox: (id: number, mailbox?: string) =>
