@@ -406,6 +406,7 @@ export const mailService = {
                 port: 993,
                 tls: true,
                 connTimeout: 15000,
+                authTimeout: 25000,
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
@@ -549,7 +550,9 @@ export const mailService = {
                 tls: true,
                 // 连接建立 15s、建立后空闲/读取 30s，避免不可达主机无限挂起
                 // （socketTimeout 运行时支持但 @types/node-imap 尚未声明，故断言）
+                // authTimeout 默认仅 5s，跨洋/弱网下 TLS 握手+登录常超时，放宽到 25s
                 connTimeout: 15000,
+                authTimeout: 25000,
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
@@ -815,6 +818,8 @@ export const mailService = {
                 port,
                 tls: true,
                 connTimeout: 15000,
+                // 默认 5s 认证超时对跨洋链路偏紧（Gmail/QQ 常在握手阶段就超限）
+                authTimeout: 25000,
                 socketTimeout: 30000,
                 tlsOptions: { rejectUnauthorized: false },
             };
@@ -1005,7 +1010,13 @@ export const mailService = {
 
         // 合并去重：新抓取结果优先，与缓存行合并后按时间倒序取前 limit
         const mergeWithCache = async (fresh: EmailMessage[]): Promise<EmailMessage[]> => {
-            const cachedRows = await mailCacheService.getRecentMessages(credentials.id, options.mailbox, limit);
+            // 全量正文请求不接受"仅邮件头"的缓存行，否则正文会被清空
+            const cachedRows = await mailCacheService.getRecentMessages(
+                credentials.id,
+                options.mailbox,
+                limit,
+                { requireBody: !headersOnly }
+            );
             const merged = new Map<string, EmailMessage>();
             for (const m of [...fresh, ...cachedRows]) {
                 if (!merged.has(m.id)) {

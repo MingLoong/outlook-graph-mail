@@ -77,15 +77,28 @@ export const mailCacheService = {
         };
     },
 
-    /** 读取缓存行（不校验 TTL，用于与增量抓取结果合并展示） */
-    async getRecentMessages(accountId: number, mailbox: string, limit: number): Promise<CachedMessage[]> {
+    /** 读取缓存行（不校验 TTL，用于与增量抓取结果合并展示）
+     *  opts.requireBody=true 时只返回带正文的缓存行（避免"仅邮件头"行混入全量正文响应）
+     */
+    async getRecentMessages(
+        accountId: number,
+        mailbox: string,
+        limit: number,
+        opts?: { requireBody?: boolean }
+    ): Promise<CachedMessage[]> {
         const folder = normalizeMailboxName(mailbox);
         const rows = await prisma.mailCache.findMany({
             where: { accountId, mailbox: folder },
             orderBy: { mailDate: 'desc' },
             take: Math.min(Math.max(limit, 1), 200),
         });
-        return rows.map(mapRowToMessage);
+        const messages = rows.map(mapRowToMessage);
+        if (!opts?.requireBody) {
+            return messages;
+        }
+        return messages.filter(
+            (m) => (m.text && m.text.length > 0) || (m.html && m.html.length > 0)
+        );
     },
 
     /** 读取 IMAP 增量同步状态（无记录返回 null） */
