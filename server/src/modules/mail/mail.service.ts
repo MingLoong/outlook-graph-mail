@@ -11,6 +11,7 @@ import prisma from '../../lib/prisma.js';
 import type { MailRequestInput } from './mail.schema.js';
 import type { EmailMessage, ImapFetchMeta } from './mail.types.js';
 import Imap from 'node-imap';
+import { ImapFlow } from 'imapflow';
 import { simpleParser, type ParsedMail, type Source } from 'mailparser';
 
 type MailFetchStrategy = 'GRAPH_FIRST' | 'IMAP_FIRST' | 'GRAPH_ONLY' | 'IMAP_ONLY';
@@ -53,6 +54,50 @@ async function preferIpv4(host: string): Promise<{ host: string; servername: str
     }
     return { host, servername: host };
 }
+
+/** 把 imapflow 的 fetch 结果转换成统一的 EmailMessage */
+async function mapFlowMessage(
+    msg: {
+        uid?: number | bigint;
+        envelope?: {
+            subject?: string | null;
+            date?: Date | string | null;
+            from?: Array<{ name?: string | null; address?: string | null }>;
+        } | null;
+        source?: Buffer | null;
+    },
+    headersOnly: boolean
+): Promise<EmailMessage | null> {
+    const uid = msg.uid !== undefined ? Number(msg.uid) : 0;
+    const fromParts = msg.envelope?.from || [];
+    const from = fromParts
+        .map((f) => (f.name ? `"${f.name}" <${f.address || ''}>` : f.address || ''))
+        .filter(Boolean)
+        .join(', ');
+    const subject = msg.envelope?.subject || '';
+    const dateValue = msg.envelope?.date;
+    const date = dateValue ? new Date(dateValue).toISOString() : '';
+
+    if (headersOnly || !msg.source) {
+        return { id: uid ? `imap:${uid}` : `imap_0_0`, from, subject, text: '', html: '', date };
+    }
+
+    const mail: ParsedMail = await simpleParser(msg.source as unknown as Source);
+    const html = typeof mail.html === 'string' ? mail.html : '';
+    return {
+        id: http0(uid),
+        from: mail.from?.text || from,
+        subject: mail.subject || subject,
+        text: mail.text || '',
+        html,
+        date: mail.date ? mail.date.toISOString() : date,
+    };
+}
+
+function http0(uid: number): string {
+    return `imap:${uid}`;
+}
+
 /** IMAP 目标地址解析器：直连返回原地址，走代理/隧道时返回本地转发地址 */
 type ImapEndpoint = (host: string, port: number) => Promise<{ host: string; port: number }>;
 
@@ -619,6 +664,224 @@ export const mailService = {
      * sync 存在且 UIDVALIDITY 一致时走 UID 增量抓取（只拉新邮件）；
      * onMeta 回传本次抓取的同步元数据，供缓存层写入。
      */
+    /** 用 imapflow 抓取邮件（兼容阿里企业邮 / 139 等 node-imap 无法完成握手的服务器） */
+    async getEmailsViaImapflow(
+        credentials: Credentials,
+        mailbox: string = 'INBOX',
+        limit: number = 100,
+        sync?: { uidValidity: number; lastUid: number } | null,
+        onMeta?: (meta: ImapFetchMeta) => void,
+        headersOnly: boolean = false,
+        imapEndpoint?: ImapEndpoint
+    ): Promise<EmailMessage[]> {
+        const providerKey = (credentials.provider || 'custom').toLowerCase();
+        const providerConfig = getProviderConfig(providerKey);
+        const host = credentials.imapHost || providerConfig?.imapHost;
+        const port = credentials.imapPort || providerConfig?.imapPort || 993;
+        const password = credentials.password;
+
+        if (!password) {
+            throw new AppError('IMAP_PASSWORD_MISSING', 'IMAP password/authorization code is required for this mailbox', 400);
+        }
+        if (!host) {
+            throw new AppError('IMAP_HOST_MISSING', 'IMAP host is required for this mailbox', 400);
+        }
+
+        const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
+        const client = new ImapFlow({
+            host: endpoint.host,
+            port: endpoint.port,
+            secure: true,
+            auth: { user: credentials.email, pass: password },
+            tls: { servername: endpoint.servername, rejectUnauthorized: false },
+            logger: false,
+            clientInfo: {
+                name: 'GongXiMail',
+                version: '2.0.0',
+                vendor: 'gongxi-mail',
+                'support-email': 'support@gongxi.local',
+            },
+            greetingTimeout: 25000,
+            socketTimeout: endpoint.tunneled ? 45000 : 30000,
+            disableAutoIdle: true,
+        });
+
+        const messages: EmailMessage[] = [];
+        let opened = false;
+        try {
+            await client.connect();
+            const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
+            let lock: { release: () => void } | null = null;
+            let openedFolder = '';
+            for (const candidate of folderCandidates) {
+                try {
+                    lock = await client.getMailboxLock(candidate);
+                    openedFolder = candidate;
+                    break;
+                } catch {
+                    // 尝试下一个候选文件夹
+                }
+            }
+            if (!lock) {
+                throw new AppError('IMAP_FOLDER_NOT_FOUND', `无法打开邮件文件夹 ${mailbox}`, 404);
+            }
+            opened = true;
+
+            try {
+                const mailboxInfo = client.mailbox;
+                const uidValidity = mailboxInfo ? Number(mailboxInfo.uidValidity) : 0;
+                const exists = mailboxInfo ? mailboxInfo.exists : 0;
+                const query = headersOnly
+                    ? { uid: true, envelope: true }
+                    : { uid: true, envelope: true, source: true };
+
+                let uids: number[] = [];
+                let full = false;
+
+                if (sync && sync.uidValidity === uidValidity) {
+                    const found = (await client.search({ uid: `${sync.lastUid + 1}:*` }, { uid: true })) || [];
+                    const fresh = found.filter((u) => Number(u) > sync.lastUid).map(Number).sort((a, b) => a - b);
+                    uids = fresh.slice(-limit);
+                } else {
+                    full = true;
+                }
+
+                if (full) {
+                    if (exists > 0) {
+                        const range = `${Math.max(1, exists - limit + 1)}:*`;
+                        for await (const msg of client.fetch(range, query)) {
+                            const parsed = await mapFlowMessage(msg, headersOnly);
+                            if (parsed) {
+                                messages.push(parsed);
+                                uids.push(Number(msg.uid));
+                            }
+                        }
+                    }
+                } else if (uids.length > 0) {
+                    for await (const msg of client.fetch(uids.join(','), query, { uid: true })) {
+                        const parsed = await mapFlowMessage(msg, headersOnly);
+                        if (parsed) {
+                            messages.push(parsed);
+                        }
+                    }
+                }
+
+                logger.debug(
+                    { email: credentials.email, folder: openedFolder, full, fetched: messages.length, uidValidity },
+                    'imapflow fetch done'
+                );
+
+                onMeta?.({
+                    uidValidity,
+                    uids: uids.length > 0 ? uids : undefined,
+                    full,
+                    headersOnly,
+                });
+            } finally {
+                lock.release();
+            }
+
+            messages.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
+            return messages;
+        } catch (err) {
+            throw normalizeImapError(err, providerKey, host, port);
+        } finally {
+            try {
+                if (opened) {
+                    await client.logout();
+                } else {
+                    client.close();
+                }
+            } catch {
+                // 忽略关闭异常
+            }
+        }
+    },
+
+    /** 用 imapflow 拉取单封邮件正文 */
+    async fetchSingleMessageViaImapflow(
+        credentials: Credentials,
+        mailbox: string,
+        uid: number,
+        imapEndpoint?: ImapEndpoint
+    ): Promise<EmailMessage> {
+        const providerKey = (credentials.provider || 'custom').toLowerCase();
+        const providerConfig = getProviderConfig(providerKey);
+        const host = credentials.imapHost || providerConfig?.imapHost;
+        const port = credentials.imapPort || providerConfig?.imapPort || 993;
+        const password = credentials.password;
+
+        if (!host) {
+            throw new AppError('IMAP_HOST_MISSING', 'IMAP host is required for this mailbox', 400);
+        }
+        if (!password) {
+            throw new AppError('IMAP_PASSWORD_MISSING', 'IMAP password/authorization code is required for this mailbox', 400);
+        }
+
+        const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
+        const client = new ImapFlow({
+            host: endpoint.host,
+            port: endpoint.port,
+            secure: true,
+            auth: { user: credentials.email, pass: password },
+            tls: { servername: endpoint.servername, rejectUnauthorized: false },
+            logger: false,
+            clientInfo: {
+                name: 'GongXiMail',
+                version: '2.0.0',
+                vendor: 'gongxi-mail',
+                'support-email': 'support@gongxi.local',
+            },
+            greetingTimeout: 25000,
+            socketTimeout: endpoint.tunneled ? 45000 : 30000,
+            disableAutoIdle: true,
+        });
+
+        let opened = false;
+        try {
+            await client.connect();
+            const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
+            let lock: { release: () => void } | null = null;
+            for (const candidate of folderCandidates) {
+                try {
+                    lock = await client.getMailboxLock(candidate);
+                    break;
+                } catch {
+                    // 尝试下一个候选文件夹
+                }
+            }
+            if (!lock) {
+                throw new AppError('IMAP_FOLDER_NOT_FOUND', `无法打开邮件文件夹 ${mailbox}`, 404);
+            }
+            opened = true;
+            try {
+                const msg = await client.fetchOne(String(uid), { uid: true, envelope: true, source: true }, { uid: true });
+                if (!msg || !msg.source) {
+                    throw new AppError('MESSAGE_NOT_FOUND', '邮件不存在或已被删除', 404);
+                }
+                const parsed = await mapFlowMessage(msg, false);
+                if (!parsed) {
+                    throw new AppError('MESSAGE_PARSE_FAILED', '邮件正文解析失败', 502);
+                }
+                return parsed;
+            } finally {
+                lock.release();
+            }
+        } catch (err) {
+            throw normalizeImapError(err, providerKey, host, port);
+        } finally {
+            try {
+                if (opened) {
+                    await client.logout();
+                } else {
+                    client.close();
+                }
+            } catch {
+                // 忽略关闭异常
+            }
+        }
+    },
+
     async getEmailsViaGenericImap(
         credentials: Credentials,
         mailbox: string = 'INBOX',
@@ -962,6 +1225,11 @@ export const mailService = {
 
         const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
 
+        // 第三方 IMAP（阿里企业邮 / 139 等）用 imapflow，node-imap 在这些服务器上无法完成握手
+        if (!('xoauth2' in auth)) {
+            return this.fetchSingleMessageViaImapflow(credentials, mailbox, uid, imapEndpoint);
+        }
+
         return new Promise((resolve, reject) => {
             const base = {
                 user: credentials.email,
@@ -981,8 +1249,8 @@ export const mailService = {
             };
             const imapConfig = (
                 'xoauth2' in auth
-                    ? { ...base, password: '', xoauth2: auth.xoauth2 }
-                    : { ...base, password: auth.password }
+                    ? { ...base, password: '', xoauth2: (auth as { xoauth2: string }).xoauth2 }
+                    : { ...base, password: (auth as { password: string }).password }
             ) as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
 
@@ -1217,7 +1485,7 @@ export const mailService = {
                     effectiveSync = null;
                 }
             }
-            let freshMessages = await this.getEmailsViaGenericImap(
+            let freshMessages = await this.getEmailsViaImapflow(
                 credentials,
                 options.mailbox,
                 limit,
@@ -1231,7 +1499,7 @@ export const mailService = {
             if (sync && fetchedMeta?.full === false && freshMessages.length >= limit) {
                 logger.info({ email: credentials.email }, 'Incremental fetch hit limit, doing full catch-up');
                 fetchedMeta = undefined;
-                freshMessages = await this.getEmailsViaGenericImap(
+                freshMessages = await this.getEmailsViaImapflow(
                     credentials,
                     options.mailbox,
                     limit,

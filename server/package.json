@@ -30,6 +30,7 @@
         "dotenv": "^16.4.7",
         "fastify": "^5.2.1",
         "fastify-plugin": "^5.1.0",
+        "imapflow": "^2.5.9",
         "ioredis": "^5.4.2",
         "jose": "^5.9.6",
         "mailparser": "^3.7.2",
