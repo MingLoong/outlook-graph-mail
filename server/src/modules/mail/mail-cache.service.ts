@@ -114,6 +114,43 @@ export const mailCacheService = {
     },
 
     /**
+     * 写入/更新邮件缓存行（按 accountId+mailbox+messageId 唯一键 upsert）。
+     * 用 upsert 而不是"先删后插"：
+     * - 之前只抓了邮件头的行，后续全量抓取能补上正文
+     * - 小 limit 的抓取（如 API 取 1 封）不会把整个文件夹的缓存清空
+     */
+    async upsertMessages(accountId: number, mailbox: string, messages: EmailMessage[]): Promise<void> {
+        if (messages.length === 0) {
+            return;
+        }
+        const folder = normalizeMailboxName(mailbox);
+        for (const m of messages) {
+            const mailDate = m.date ? new Date(m.date) : new Date();
+            await prisma.mailCache.upsert({
+                where: { accountId_mailbox_messageId: { accountId, mailbox: folder, messageId: m.id } },
+                create: {
+                    accountId,
+                    mailbox: folder,
+                    messageId: m.id,
+                    fromAddr: m.from,
+                    subject: m.subject,
+                    textBody: m.text,
+                    htmlBody: m.html,
+                    mailDate,
+                },
+                update: {
+                    fromAddr: m.from,
+                    subject: m.subject,
+                    textBody: m.text,
+                    htmlBody: m.html,
+                    mailDate,
+                    cachedAt: new Date(),
+                },
+            });
+        }
+    },
+
+    /**
      * 抓取成功后写入缓存并更新同步状态。
      * - meta.full：整文件夹替换（首次全量 / UIDVALIDITY 变化）
      * - 带 uidValidity 且非 full：增量补入新邮件
@@ -150,9 +187,7 @@ export const mailCacheService = {
                     });
                 }
             } else {
-                if (fullReplace) {
-                    await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
-                } else if (hasImapMeta) {
+                if (hasImapMeta) {
                     // 增量模式：UIDVALIDITY 变化则整个文件夹作废
                     const state = await prisma.mailSyncState.findUnique({
                         where: { accountId_mailbox: { accountId, mailbox: folder } },
@@ -160,23 +195,15 @@ export const mailCacheService = {
                     if (state && state.uidValidity !== meta?.uidValidity) {
                         await prisma.mailCache.deleteMany({ where: { accountId, mailbox: folder } });
                     }
-                }
-
-                if (messages.length > 0) {
-                    await prisma.mailCache.createMany({
-                        data: messages.map((m) => ({
-                            accountId,
-                            mailbox: folder,
-                            messageId: m.id,
-                            fromAddr: m.from,
-                            subject: m.subject,
-                            textBody: m.text,
-                            htmlBody: m.html,
-                            mailDate: m.date ? new Date(m.date) : new Date(),
-                        })),
-                        skipDuplicates: true,
+                } else if (fullReplace) {
+                    // Graph 等无 UID 语义的来源：清理没有正文的旧行，正文行保留
+                    await prisma.mailCache.deleteMany({
+                        where: { accountId, mailbox: folder, textBody: '', htmlBody: '' },
                     });
                 }
+
+                // 正文抓取统一走 upsert：补齐既有"仅邮件头"行的正文，且不清空其它行
+                await this.upsertMessages(accountId, mailbox, messages);
             }
 
             if (hasImapMeta && typeof meta?.uidValidity === 'number') {

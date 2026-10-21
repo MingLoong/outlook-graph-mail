@@ -1037,11 +1037,23 @@ export const mailService = {
                 fetchedMeta = headersOnly ? { ...meta, headersOnly: true } : meta;
             };
             const sync = await mailCacheService.getSyncState(credentials.id, options.mailbox);
+            // 全量正文请求：若缓存里只有"仅邮件头"的行（无正文），强制全量重取以补齐正文
+            let effectiveSync = sync;
+            if (!headersOnly && sync) {
+                const recent = await mailCacheService.getRecentMessages(credentials.id, options.mailbox, 5);
+                const hasBody = recent.some(
+                    (m) => (m.text && m.text.length > 0) || (m.html && m.html.length > 0)
+                );
+                if (recent.length > 0 && !hasBody) {
+                    logger.info({ email: credentials.email }, 'Cache has headers only, doing full fetch for body');
+                    effectiveSync = null;
+                }
+            }
             let freshMessages = await this.getEmailsViaGenericImap(
                 credentials,
                 options.mailbox,
                 limit,
-                sync,
+                effectiveSync,
                 onMeta,
                 headersOnly
             );
