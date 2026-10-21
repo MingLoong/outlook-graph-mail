@@ -170,10 +170,12 @@ export const mailCacheService = {
             const fullReplace = !hasImapMeta || meta?.full === true;
 
             if (headersOnly) {
-                // 只写邮件头：不删除已有行（保留已缓存正文），skipDuplicates 避免覆盖带正文的行
-                if (messages.length > 0) {
-                    await prisma.mailCache.createMany({
-                        data: messages.map((m) => ({
+                // 只写邮件头：更新元数据和 cachedAt，但绝不覆盖已有正文
+                for (const m of messages) {
+                    const mailDate = m.date ? new Date(m.date) : new Date();
+                    await prisma.mailCache.upsert({
+                        where: { accountId_mailbox_messageId: { accountId, mailbox: folder, messageId: m.id } },
+                        create: {
                             accountId,
                             mailbox: folder,
                             messageId: m.id,
@@ -181,9 +183,14 @@ export const mailCacheService = {
                             subject: m.subject,
                             textBody: m.text,
                             htmlBody: m.html,
-                            mailDate: m.date ? new Date(m.date) : new Date(),
-                        })),
-                        skipDuplicates: true,
+                            mailDate,
+                        },
+                        update: {
+                            fromAddr: m.from,
+                            subject: m.subject,
+                            mailDate,
+                            cachedAt: new Date(),
+                        },
                     });
                 }
             } else {
