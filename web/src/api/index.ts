@@ -259,6 +259,15 @@ api.interceptors.response.use(
             });
         }
 
+        // 前端超时（如邮件服务器响应慢/不可达）：给出可执行的中文提示
+        if (error.code === 'ECONNABORTED' && /timeout/i.test(error.message)) {
+            const seconds = Math.round((error.config?.timeout ?? 30000) / 1000);
+            return Promise.reject({
+                code: 504,
+                message: `请求超时（${seconds} 秒）：邮件服务器响应过慢或当前网络不可达，请稍后重试`,
+            });
+        }
+
         return Promise.reject({
             code: 500,
             message: error.message || 'Network error',
@@ -538,13 +547,16 @@ export const emailApi = {
 
     // 查看邮件 (管理员专用)
     viewMails: <T = Record<string, unknown>>(id: number, mailbox?: string) =>
-        requestGet<{ messages: T[] }>(`/admin/emails/${id}/mails`, { params: { mailbox } }),
+        requestGet<{ messages: T[] }>(`/admin/emails/${id}/mails`, {
+            params: { mailbox, limit: 50 },
+            timeout: 90000,
+        }),
 
     // 清空邮箱 (管理员专用)
     clearMailbox: (id: number, mailbox?: string) =>
         requestPost<{ deletedCount: number }, { mailbox?: string }>(`/admin/emails/${id}/clear`, {
             mailbox,
-        }),
+        }, { timeout: 120000 }),
 
     // Token 刷新
     refreshTokens: (groupId?: number) =>

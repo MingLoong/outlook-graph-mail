@@ -74,10 +74,20 @@ function isOutlookProvider(credentials: Credentials): boolean {
 /**
  * 将第三方 IMAP 的原始报错转成带排查提示的应用错误
  */
-function normalizeImapError(err: unknown, provider: string, host: string): AppError {
+function normalizeImapError(err: unknown, provider: string, host: string, port: number): AppError {
     const raw = getErrorMessage(err);
     const providerKey = (provider || '').toLowerCase();
     const lowered = raw.toLowerCase();
+
+    // 连接/读取超时：常见于海外服务器无法访问的 IMAP 主机
+    if (lowered.includes('timed out') || lowered.includes('timeout')) {
+        return new AppError(
+            'IMAP_TIMEOUT',
+            `IMAP 连接超时（${host}:${port}）：该服务器可能无法从当前服务器网络访问，可在请求中携带 socks5/http 代理参数重试`,
+            504
+        );
+    }
+
     const isAuthError =
         lowered.includes('authentication') ||
         lowered.includes('login fail') ||
@@ -396,10 +406,12 @@ export const mailService = {
                 host: 'outlook.office365.com',
                 port: 993,
                 tls: true,
+                connTimeout: 15000,
+                socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
                 },
-            };
+            } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
 
             const emailList: EmailMessage[] = [];
@@ -526,10 +538,14 @@ export const mailService = {
                 host,
                 port,
                 tls: true,
+                // 连接建立 15s、建立后空闲/读取 30s，避免不可达主机无限挂起
+                // （socketTimeout 运行时支持但 @types/node-imap 尚未声明，故断言）
+                connTimeout: 15000,
+                socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
                 },
-            };
+            } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
 
             const emailList: EmailMessage[] = [];
@@ -622,13 +638,13 @@ export const mailService = {
                     });
                 } catch (err) {
                     imap.end();
-                    reject(normalizeImapError(err, providerKey, host));
+                    reject(normalizeImapError(err, providerKey, host, port));
                 }
             });
 
             imap.once('error', (err: Error) => {
                 logger.error({ err, host, provider: providerKey }, 'Generic IMAP connection error');
-                reject(normalizeImapError(err, providerKey, host));
+                reject(normalizeImapError(err, providerKey, host, port));
             });
 
             imap.once('end', () => {

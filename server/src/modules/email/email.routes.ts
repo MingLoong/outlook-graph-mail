@@ -134,7 +134,7 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 查看邮件 (管理员专用)
     fastify.get('/:id/mails', async (request) => {
         const { id } = request.params as { id: string };
-        const { mailbox } = request.query as { mailbox?: string };
+        const { mailbox, limit } = request.query as { mailbox?: string; limit?: string };
 
         const emailData = await emailService.getById(parseInt(id), true);
 
@@ -151,7 +151,15 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             fetchStrategy: emailData.group?.fetchStrategy,
         };
 
-        const mails = await mailService.getEmails(credentials, { mailbox: mailbox || 'INBOX' });
+        // 可选限制返回数量（默认沿用 getEmails 的 100），减少面板首屏等待
+        const parsedLimit = limit
+            ? Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100)
+            : undefined;
+
+        const mails = await mailService.getEmails(credentials, {
+            mailbox: mailbox || 'INBOX',
+            limit: parsedLimit,
+        });
         await emailService.touchLastCheckAt(emailData.id);
         return { success: true, data: mails };
     });
