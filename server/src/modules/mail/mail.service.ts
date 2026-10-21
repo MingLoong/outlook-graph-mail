@@ -590,9 +590,10 @@ export const mailService = {
                 // 连接建立 15s、建立后空闲/读取 30s，避免不可达主机无限挂起
                 // （socketTimeout 运行时支持但 @types/node-imap 尚未声明，故断言）
                 // authTimeout 默认仅 5s，跨洋/弱网下 TLS 握手+登录常超时，放宽到 25s
-                connTimeout: 15000,
+                // 走 SSH/SOCKS 隧道时握手更慢，连接与读写超时再放宽一档
+                connTimeout: endpoint.tunneled ? 25000 : 15000,
                 authTimeout: 25000,
-                socketTimeout: 30000,
+                socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
                     ...(endpoint.tunneled ? { servername: host } : {}),
@@ -885,10 +886,11 @@ export const mailService = {
                 host: endpoint.host,
                 port: endpoint.port,
                 tls: true,
-                connTimeout: 15000,
+                // 走隧道时 TLS 握手会额外增加数秒，连接与总超时都要放宽
+                connTimeout: endpoint.tunneled ? 25000 : 15000,
                 // 默认 5s 认证超时对跨洋链路偏紧（Gmail/QQ 常在握手阶段就超限）
                 authTimeout: 25000,
-                socketTimeout: 30000,
+                socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
                     ...(endpoint.tunneled ? { servername: host } : {}),
@@ -903,7 +905,7 @@ export const mailService = {
 
             let settled = false;
             let result: EmailMessage | null = null;
-            const totalTimeoutMs = 30000;
+            const totalTimeoutMs = endpoint.tunneled ? 75000 : 30000;
             const watchdog = setTimeout(() => {
                 if (settled) return;
                 settled = true;
