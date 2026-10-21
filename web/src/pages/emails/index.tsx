@@ -64,6 +64,7 @@ const PROVIDER_OPTIONS = [
     { value: '126', label: '126邮箱', authType: 'password', imapHost: 'imap.126.com', imapPort: 993, note: '需开启 IMAP 服务，使用授权码' },
     { value: 'yahoo', label: 'Yahoo邮箱', authType: 'password', imapHost: 'imap.mail.yahoo.com', imapPort: 993, note: '需在账户安全设置中生成应用密码' },
     { value: 'aliyun', label: '阿里邮箱', authType: 'password', imapHost: 'imap.aliyun.com', imapPort: 993, note: '使用阿里邮箱登录密码或授权码' },
+    { value: 'aliyunqiye', label: '阿里企业邮', authType: 'password', imapHost: 'imap.qiye.aliyun.com', imapPort: 993, note: '企业邮箱：完整邮箱地址 + 登录密码（或客户端专用密码）' },
     { value: 'custom', label: '自定义 IMAP', authType: 'password', imapHost: '', imapPort: 993, note: '手动填写 IMAP 服务器地址和端口' },
 ] as const;
 
