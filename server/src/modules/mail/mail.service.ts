@@ -1,4 +1,4 @@
-﻿import { emailService } from '../email/email.service.js';
+import { emailService } from '../email/email.service.js';
 import { poolService } from './pool.service.js';
 import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
@@ -489,7 +489,7 @@ export const mailService = {
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    ...(endpoint.tunneled ? { servername: targetHost } : {}),
+                    servername: targetHost,
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -640,7 +640,7 @@ export const mailService = {
                 socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    ...(endpoint.tunneled ? { servername: host } : {}),
+                    servername: host,
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -955,7 +955,7 @@ export const mailService = {
                 socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    ...(endpoint.tunneled ? { servername: host } : {}),
+                    servername: host,
                 },
             };
             const imapConfig = (
