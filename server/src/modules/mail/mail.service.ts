@@ -490,6 +490,7 @@ export const mailService = {
                 tlsOptions: {
                     rejectUnauthorized: false,
                     servername: targetHost,
+                    family: 4,
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -641,6 +642,7 @@ export const mailService = {
                 tlsOptions: {
                     rejectUnauthorized: false,
                     servername: host,
+                    family: 4,
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -956,6 +958,7 @@ export const mailService = {
                 tlsOptions: {
                     rejectUnauthorized: false,
                     servername: host,
+                    family: 4,
                 },
             };
             const imapConfig = (
