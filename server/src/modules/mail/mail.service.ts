@@ -36,6 +36,23 @@ interface OAuthTokenResponse {
     scope?: string;
 }
 
+/**
+ * 部分邮箱（139.com、阿里企业邮等）同时有 AAAA 记录，而服务器没有 IPv6 出口，
+ * Node 的多地址并发连接会因 IPv6 不可达而整体失败或长时间挂起。
+ * 这里显式解析到 IPv4，并保留原域名作为 TLS SNI。
+ */
+async function preferIpv4(host: string): Promise<{ host: string; servername: string }> {
+    try {
+        const { lookup } = await import('node:dns/promises');
+        const res = await lookup(host, { family: 4 });
+        if (res && res.address) {
+            return { host: res.address, servername: host };
+        }
+    } catch {
+        // 解析失败则退回原域名
+    }
+    return { host, servername: host };
+}
 /** IMAP 目标地址解析器：直连返回原地址，走代理/隧道时返回本地转发地址 */
 type ImapEndpoint = (host: string, port: number) => Promise<{ host: string; port: number }>;
 
@@ -43,12 +60,13 @@ async function resolveImapEndpoint(
     endpoint: ImapEndpoint | undefined,
     host: string,
     port: number
-): Promise<{ host: string; port: number; tunneled: boolean }> {
+): Promise<{ host: string; port: number; tunneled: boolean; servername: string }> {
     if (!endpoint) {
-        return { host, port, tunneled: false };
+        const v4 = await preferIpv4(host);
+        return { host: v4.host, port, tunneled: false, servername: v4.servername };
     }
     const local = await endpoint(host, port);
-    return { host: local.host, port: local.port, tunneled: true };
+    return { host: local.host, port: local.port, tunneled: true, servername: host };
 }
 
 /**
@@ -489,7 +507,7 @@ export const mailService = {
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    servername: targetHost,
+                    servername: endpoint.servername,
                     family: 4,
                 },
             } as ConstructorParameters<typeof Imap>[0];
@@ -641,7 +659,7 @@ export const mailService = {
                 socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    servername: host,
+                    servername: endpoint.servername,
                     family: 4,
                 },
             } as ConstructorParameters<typeof Imap>[0];
@@ -957,7 +975,7 @@ export const mailService = {
                 socketTimeout: endpoint.tunneled ? 45000 : 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
-                    servername: host,
+                    servername: endpoint.servername,
                     family: 4,
                 },
             };
