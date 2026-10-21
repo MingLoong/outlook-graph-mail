@@ -199,7 +199,7 @@ export const emailService = {
             throw new AppError('NOT_FOUND', 'Email account not found', 404);
         }
 
-        const { provider, refreshToken, password, clientId, imapHost, imapPort, proxyId, ...rest } = input;
+        const { provider, refreshToken, password, clientId, imapHost, imapPort, proxyId, groupId, ...rest } = input;
         const updateData: Prisma.EmailAccountUpdateInput = { ...rest };
 
         // 处理提供商变更或保留原值
@@ -207,6 +207,9 @@ export const emailService = {
         updateData.provider = nextProvider;
         if (proxyId !== undefined) {
             updateData.proxy = proxyId === null ? { disconnect: true } : { connect: { id: proxyId } };
+        }
+        if (groupId !== undefined) {
+            updateData.group = groupId === null ? { disconnect: true } : { connect: { id: groupId } };
         }
 
         const providerConfig = getProviderConfig(nextProvider);
