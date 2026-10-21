@@ -145,6 +145,7 @@ interface EmailListResult {
 
 interface MailItem {
     id: string;
+    folder?: 'inbox' | 'junk';
     from: string;
     subject: string;
     text: string;
@@ -1341,9 +1342,12 @@ const EmailsPage: React.FC = () => {
                             >
                                 <List.Item.Meta
                                     title={
-                                        <Typography.Text ellipsis style={{ maxWidth: 600 }}>
+                                        <Space size={6}>
+                                            {item.folder === 'junk' ? <Tag color="orange">垃圾箱</Tag> : null}
+                                            <Typography.Text ellipsis style={{ maxWidth: 600 }}>
                                             {item.subject || '(无主题)'}
                                         </Typography.Text>
+                                        </Space>
                                     }
                                     description={
                                         <Space size="large">

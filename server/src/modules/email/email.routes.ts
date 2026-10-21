@@ -135,11 +135,12 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     // 查看邮件 (管理员专用)
     fastify.get('/:id/mails', async (request) => {
         const { id } = request.params as { id: string };
-        const { mailbox, limit, fresh, headers } = request.query as {
+        const { mailbox, limit, fresh, headers, junk } = request.query as {
             mailbox?: string;
             limit?: string;
             fresh?: string;
             headers?: string;
+            junk?: string;
         };
 
         const emailData = await emailService.getById(parseInt(id), true);
@@ -173,7 +174,8 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
             fresh: fresh === '1' || fresh === 'true',
             cacheTtlSeconds: env.MAIL_CACHE_TTL_PANEL_SECONDS,
             headersOnly,
-        });
+            // 默认合并垃圾箱（?junk=0 可关闭）
+            includeJunk: junk !== '0' && junk !== 'false',        });
         await emailService.touchLastCheckAt(emailData.id);
         return { success: true, data: mails };
     });

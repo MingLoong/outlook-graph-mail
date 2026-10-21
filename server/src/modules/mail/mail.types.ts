@@ -1,6 +1,8 @@
 /** 一封邮件的标准化表示 */
 export interface EmailMessage {
     id: string;
+    /** 邮件来源文件夹：收件箱或垃圾箱（用于面板角标） */
+    folder?: 'inbox' | 'junk';
     from: string;
     subject: string;
     text: string;

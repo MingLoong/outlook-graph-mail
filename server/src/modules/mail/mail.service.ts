@@ -1393,6 +1393,8 @@ export const mailService = {
             cacheTtlSeconds?: number;
             /** 只取邮件头（不含正文），列表页秒开用 */
             headersOnly?: boolean;
+            /** 同时合并垃圾箱邮件（默认关闭，面板会显式开启） */
+            includeJunk?: boolean;
         }
     ) {
         // 代理优先级：请求显式参数 > 账号绑定的代理配置
@@ -1411,6 +1413,7 @@ export const mailService = {
         const limit = options.limit || 100;
         const cacheTtl = options.cacheTtlSeconds ?? 0;
         const headersOnly = options.headersOnly === true;
+        const includeJunk = options.includeJunk === true;
 
         const wrapResult = (messages: EmailMessage[], method: string, cached: boolean, cachedAt?: Date) => ({
             email: credentials.email,
@@ -1421,6 +1424,37 @@ export const mailService = {
             cached,
             cachedAt: (cachedAt ?? new Date()).toISOString(),
         });
+
+        // 合并垃圾箱：递归抓取 junkemail 后按 id 去重（垃圾箱 id 加 junk: 前缀，避免与收件箱 UID 冲突）
+        const withJunk = async (base: EmailMessage[]): Promise<EmailMessage[]> => {
+            if (!includeJunk) {
+                return base;
+            }
+            try {
+                const junk = await this.getEmails(credentials, {
+                    ...options,
+                    mailbox: 'junkemail',
+                    includeJunk: false,
+                });
+                const tagged: EmailMessage[] = (junk.messages || []).map((m) => ({
+                    ...m,
+                    id: m.id.startsWith('junk:') ? m.id : `junk:${m.id}`,
+                    folder: 'junk' as const,
+                }));
+                const merged = new Map<string, EmailMessage>();
+                for (const m of [...base, ...tagged]) {
+                    if (!merged.has(m.id)) {
+                        merged.set(m.id, m);
+                    }
+                }
+                return [...merged.values()].sort(
+                    (a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()
+                );
+            } catch (err) {
+                logger.debug({ err, email: credentials.email }, 'Junk mailbox merge skipped');
+                return base;
+            }
+        };
 
         // 读缓存：TTL 内直接返回（需要正文的调用方只接受带正文的缓存行）
         if (!options.fresh && cacheTtl > 0) {
@@ -1436,7 +1470,8 @@ export const mailService = {
                 const messages = headersOnly
                     ? cached.messages.map((m) => ({ ...m, text: '', html: '' }))
                     : cached.messages;
-                return wrapResult(messages.slice(0, limit), 'cache', true, cached.cachedAt);
+                const combined = await withJunk(messages);
+                return wrapResult(combined.slice(0, limit), 'cache', true, cached.cachedAt);
             }
         }
 
@@ -1512,7 +1547,7 @@ export const mailService = {
 
             await persist(freshMessages, fetchedMeta);
             const messages = await mergeWithCache(freshMessages);
-            return wrapResult(messages, 'imap', false);
+            return wrapResult(await withJunk(messages), 'imap', false);
         }
 
         const fetchViaGraph = async () => {
