@@ -161,6 +161,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             password: emailAccount.password,
             imapHost: emailAccount.imapHost,
             imapPort: emailAccount.imapPort,
+            proxyId: emailAccount.proxyId,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -254,6 +255,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             password: emailAccount.password,
             imapHost: emailAccount.imapHost,
             imapPort: emailAccount.imapPort,
+            proxyId: emailAccount.proxyId,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -350,6 +352,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             password: emailAccount.password,
             imapHost: emailAccount.imapHost,
             imapPort: emailAccount.imapPort,
+            proxyId: emailAccount.proxyId,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };
@@ -424,6 +427,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
             password: emailAccount.password,
             imapHost: emailAccount.imapHost,
             imapPort: emailAccount.imapPort,
+            proxyId: emailAccount.proxyId,
             autoAssigned: false,
             fetchStrategy: emailAccount.fetchStrategy,
         };

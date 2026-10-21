@@ -47,6 +47,7 @@ const createBaseSchema = z.object({
     imapHost: z.string().min(1).optional(),
     imapPort: z.coerce.number().int().min(1).max(65535).optional(),
     groupId: z.coerce.number().int().positive().optional(),
+    proxyId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
 });
 
 export const createEmailSchema = createBaseSchema.superRefine((value, ctx) => {
@@ -59,6 +60,7 @@ export const updateEmailSchema = createBaseSchema
     .extend({
         status: z.enum(['ACTIVE', 'ERROR', 'DISABLED']).optional(),
         groupId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+        proxyId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
     })
     .superRefine((value, ctx) => {
         checkProviderCredentials(value, ctx, false);
@@ -79,6 +81,7 @@ export const importEmailSchema = z.object({
     separator: z.string().default('----'),
     provider: z.union([providerSchema, z.literal('auto')]).default('auto'),
     groupId: z.coerce.number().int().positive().optional(),
+    proxyId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
 });
 
 export type CreateEmailInput = z.infer<typeof createEmailSchema>;

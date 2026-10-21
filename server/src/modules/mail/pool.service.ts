@@ -134,6 +134,7 @@ export const poolService = {
                 password: true,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
                 groupId: true,
                 group: {
                     select: {

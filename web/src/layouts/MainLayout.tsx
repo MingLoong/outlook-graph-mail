@@ -23,6 +23,7 @@ import {
     FileTextOutlined,
     HistoryOutlined,
     FileSearchOutlined,
+    CloudServerOutlined,
 } from '@ant-design/icons';
 import { useAuthStore } from '../stores/authStore';
 import { authApi } from '../api';
@@ -34,6 +35,7 @@ const { Text } = Typography;
 const menuConfig = [
     { key: '/dashboard', icon: <DashboardOutlined />, label: '数据概览', title: '数据概览' },
     { key: '/emails', icon: <MailOutlined />, label: '邮箱管理', title: '邮箱管理' },
+    { key: '/proxies', icon: <CloudServerOutlined />, label: '代理配置', title: '代理配置（SSH / SOCKS5 / HTTP）' },
     { key: '/api-keys', icon: <KeyOutlined />, label: 'API Key', title: 'API Key 管理' },
     { key: '/api-docs', icon: <FileTextOutlined />, label: 'API 文档', title: 'API 文档' },
     { key: '/operation-logs', icon: <HistoryOutlined />, label: '操作日志', title: '操作日志' },

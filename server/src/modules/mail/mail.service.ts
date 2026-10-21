@@ -6,6 +6,7 @@ import { setCache, getCache } from '../../lib/redis.js';
 import { proxyFetch } from '../../lib/proxy.js';
 import { getImapFolderCandidates, getProviderConfig } from './providers.js';
 import { mailCacheService } from './mail-cache.service.js';
+import { proxyService, type ProxyRuntime } from '../proxy/proxy.service.js';
 import prisma from '../../lib/prisma.js';
 import type { MailRequestInput } from './mail.schema.js';
 import type { EmailMessage, ImapFetchMeta } from './mail.types.js';
@@ -23,6 +24,8 @@ interface Credentials {
     password?: string | null;
     imapHost?: string | null;
     imapPort?: number | null;
+    /** 绑定的代理配置 id（SSH 隧道 / SOCKS5 / HTTP），为空表示直连 */
+    proxyId?: number | null;
     autoAssigned: boolean;
     fetchStrategy?: MailFetchStrategy;
 }
@@ -31,6 +34,34 @@ interface OAuthTokenResponse {
     access_token?: string;
     expires_in?: number;
     scope?: string;
+}
+
+/** IMAP 目标地址解析器：直连返回原地址，走代理/隧道时返回本地转发地址 */
+type ImapEndpoint = (host: string, port: number) => Promise<{ host: string; port: number }>;
+
+async function resolveImapEndpoint(
+    endpoint: ImapEndpoint | undefined,
+    host: string,
+    port: number
+): Promise<{ host: string; port: number; tunneled: boolean }> {
+    if (!endpoint) {
+        return { host, port, tunneled: false };
+    }
+    const local = await endpoint(host, port);
+    return { host: local.host, port: local.port, tunneled: true };
+}
+
+/** 解析账号绑定的代理；任何异常都退化为直连，避免影响收信主流程 */
+async function safeResolveProxy(proxyId?: number | null): Promise<ProxyRuntime | null> {
+    if (!proxyId) {
+        return null;
+    }
+    try {
+        return await proxyService.resolveRuntime(proxyId);
+    } catch (err) {
+        logger.warn({ err, proxyId }, 'Failed to resolve account proxy config');
+        return null;
+    }
 }
 
 interface GraphMessage {
@@ -395,21 +426,26 @@ export const mailService = {
         email: string,
         authString: string,
         mailbox: string = 'INBOX',
-        limit: number = 100
+        limit: number = 100,
+        imapEndpoint?: ImapEndpoint
     ): Promise<EmailMessage[]> {
+        const targetHost = 'outlook.office365.com';
+        const targetPort = 993;
+        const endpoint = await resolveImapEndpoint(imapEndpoint, targetHost, targetPort);
         return new Promise((resolve, reject) => {
             const imapConfig: ConstructorParameters<typeof Imap>[0] = {
                 user: email,
                 password: '',
                 xoauth2: authString,
-                host: 'outlook.office365.com',
-                port: 993,
+                host: endpoint.host,
+                port: endpoint.port,
                 tls: true,
                 connTimeout: 15000,
                 authTimeout: 25000,
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
+                    ...(endpoint.tunneled ? { servername: targetHost } : {}),
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -526,7 +562,8 @@ export const mailService = {
         limit: number = 100,
         sync?: { uidValidity: number; lastUid: number } | null,
         onMeta?: (meta: ImapFetchMeta) => void,
-        headersOnly: boolean = false
+        headersOnly: boolean = false,
+        imapEndpoint?: ImapEndpoint
     ): Promise<EmailMessage[]> {
         const providerKey = (credentials.provider || 'custom').toLowerCase();
         const providerConfig = getProviderConfig(providerKey);
@@ -541,12 +578,14 @@ export const mailService = {
             throw new AppError('IMAP_HOST_MISSING', 'IMAP host is required for this mailbox', 400);
         }
 
+        const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
+
         return new Promise((resolve, reject) => {
             const imapConfig: ConstructorParameters<typeof Imap>[0] = {
                 user: credentials.email,
                 password,
-                host,
-                port,
+                host: endpoint.host,
+                port: endpoint.port,
                 tls: true,
                 // 连接建立 15s、建立后空闲/读取 30s，避免不可达主机无限挂起
                 // （socketTimeout 运行时支持但 @types/node-imap 尚未声明，故断言）
@@ -556,6 +595,7 @@ export const mailService = {
                 socketTimeout: 30000,
                 tlsOptions: {
                     rejectUnauthorized: false,
+                    ...(endpoint.tunneled ? { servername: host } : {}),
                 },
             } as ConstructorParameters<typeof Imap>[0];
             const imap = new Imap(imapConfig);
@@ -757,13 +797,31 @@ export const mailService = {
         credentials: Credentials,
         mailbox: string,
         messageId: string,
-        proxyConfig?: { socks5?: string; http?: string }
+        proxyConfig?: { socks5?: string; http?: string },
+        imapEndpoint?: ImapEndpoint
     ): Promise<EmailMessage> {
+        // 未显式指定代理时，使用账号绑定的代理配置（SSH 隧道 / SOCKS5 / HTTP）
+        let resolvedProxyConfig = proxyConfig;
+        let endpoint = imapEndpoint;
+        if (!proxyConfig?.socks5 && !proxyConfig?.http) {
+            const runtime = await safeResolveProxy(credentials.proxyId);
+            if (runtime) {
+                endpoint = endpoint ?? runtime.imapEndpoint;
+                if (runtime.httpProxy) {
+                    try {
+                        resolvedProxyConfig = await runtime.httpProxy();
+                    } catch (err) {
+                        logger.warn({ err, proxyId: runtime.id }, 'Failed to prepare proxy for body fetch');
+                    }
+                }
+            }
+        }
+
         const imapMatch = /^imap:(\d+)$/.exec(messageId);
         if (imapMatch) {
             const uid = parseInt(imapMatch[1], 10);
             if (isOutlookProvider(credentials)) {
-                const imapToken = await this.getImapAccessToken(credentials, proxyConfig);
+                const imapToken = await this.getImapAccessToken(credentials, resolvedProxyConfig);
                 if (!imapToken) {
                     throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
                 }
@@ -771,10 +829,17 @@ export const mailService = {
                     credentials,
                     mailbox,
                     uid,
-                    { xoauth2: this.generateAuthString(credentials.email, imapToken) }
+                    { xoauth2: this.generateAuthString(credentials.email, imapToken) },
+                    endpoint
                 );
             }
-            return this.fetchSingleMessageViaImap(credentials, mailbox, uid, { password: credentials.password || '' });
+            return this.fetchSingleMessageViaImap(
+                credentials,
+                mailbox,
+                uid,
+                { password: credentials.password || '' },
+                endpoint
+            );
         }
 
         if (!isOutlookProvider(credentials)) {
@@ -785,11 +850,11 @@ export const mailService = {
             );
         }
 
-        const tokenResult = await this.getGraphAccessToken(credentials, proxyConfig);
+        const tokenResult = await this.getGraphAccessToken(credentials, resolvedProxyConfig);
         if (!tokenResult) {
             throw new AppError('GRAPH_TOKEN_FAILED', 'Failed to get Graph API access token', 502);
         }
-        return this.getMessageBodyViaGraphApi(tokenResult.accessToken, messageId, proxyConfig);
+        return this.getMessageBodyViaGraphApi(tokenResult.accessToken, messageId, resolvedProxyConfig);
     },
 
     /** IMAP 拉取单封邮件正文 */
@@ -797,7 +862,8 @@ export const mailService = {
         credentials: Credentials,
         mailbox: string,
         uid: number,
-        auth: { password: string } | { xoauth2: string }
+        auth: { password: string } | { xoauth2: string },
+        imapEndpoint?: ImapEndpoint
     ): Promise<EmailMessage> {
         const providerKey = (credentials.provider || 'custom').toLowerCase();
         const providerConfig = getProviderConfig(providerKey);
@@ -811,17 +877,22 @@ export const mailService = {
             throw new AppError('IMAP_PASSWORD_MISSING', 'IMAP password/authorization code is required for this mailbox', 400);
         }
 
+        const endpoint = await resolveImapEndpoint(imapEndpoint, host, port);
+
         return new Promise((resolve, reject) => {
             const base = {
                 user: credentials.email,
-                host,
-                port,
+                host: endpoint.host,
+                port: endpoint.port,
                 tls: true,
                 connTimeout: 15000,
                 // 默认 5s 认证超时对跨洋链路偏紧（Gmail/QQ 常在握手阶段就超限）
                 authTimeout: 25000,
                 socketTimeout: 30000,
-                tlsOptions: { rejectUnauthorized: false },
+                tlsOptions: {
+                    rejectUnauthorized: false,
+                    ...(endpoint.tunneled ? { servername: host } : {}),
+                },
             };
             const imapConfig = (
                 'xoauth2' in auth
@@ -970,7 +1041,18 @@ export const mailService = {
             headersOnly?: boolean;
         }
     ) {
-        const proxyConfig = { socks5: options.socks5, http: options.http };
+        // 代理优先级：请求显式参数 > 账号绑定的代理配置
+        const accountProxy: ProxyRuntime | null = await safeResolveProxy(credentials.proxyId);
+        const hasExplicitProxy = Boolean(options.socks5 || options.http);
+        let proxyConfig: { socks5?: string; http?: string } = { socks5: options.socks5, http: options.http };
+        if (!hasExplicitProxy && accountProxy?.httpProxy) {
+            try {
+                proxyConfig = await accountProxy.httpProxy();
+            } catch (err) {
+                logger.warn({ err, proxyId: accountProxy.id }, 'Failed to prepare HTTP proxy from account proxy');
+            }
+        }
+        const imapEndpoint = hasExplicitProxy ? undefined : accountProxy?.imapEndpoint;
         const strategy: MailFetchStrategy = credentials.fetchStrategy || 'GRAPH_FIRST';
         const limit = options.limit || 100;
         const cacheTtl = options.cacheTtlSeconds ?? 0;
@@ -1055,7 +1137,8 @@ export const mailService = {
                 limit,
                 effectiveSync,
                 onMeta,
-                headersOnly
+                headersOnly,
+                imapEndpoint
             );
 
             // 增量抓取把 limit 占满：可能有更早的未拉邮件，全量追平一次
@@ -1068,7 +1151,8 @@ export const mailService = {
                     limit,
                     null,
                     onMeta,
-                    headersOnly
+                    headersOnly,
+                    imapEndpoint
                 );
             }
 
@@ -1111,7 +1195,8 @@ export const mailService = {
                 credentials.email,
                 authString,
                 options.mailbox,
-                limit
+                limit,
+                imapEndpoint
             );
 
             await persist(messages);

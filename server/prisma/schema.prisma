@@ -74,6 +74,32 @@ model EmailGroup {
 }
 
 // ============================================
+// 代理配置（SSH 动态隧道 / SOCKS5 / HTTP）
+// ============================================
+model ProxyConfig {
+  id            Int       @id @default(autoincrement())
+  name          String    @unique @db.VarChar(50)
+  type          String    @default("SSH") @db.VarChar(16) // SSH | SOCKS5 | HTTP
+  url           String?   @db.VarChar(500)                // SOCKS5 / HTTP 代理地址
+  sshHost       String?   @map("ssh_host") @db.VarChar(255)
+  sshPort       Int       @default(22) @map("ssh_port")
+  sshUser       String?   @map("ssh_user") @db.VarChar(100)
+  authType      String    @default("KEY") @map("auth_type") @db.VarChar(16) // KEY | PASSWORD
+  password      String?   @db.Text // AES 加密
+  privateKey    String?   @map("private_key") @db.Text // AES 加密
+  passphrase    String?   @db.Text // AES 加密
+  enabled       Boolean   @default(true)
+  lastCheckedAt DateTime? @map("last_checked_at")
+  lastError     String?   @map("last_error") @db.Text
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  accounts EmailAccount[]
+
+  @@map("proxy_configs")
+}
+
+// ============================================
 // 邮箱账户
 // ============================================
 model EmailAccount {
@@ -87,6 +113,7 @@ model EmailAccount {
   imapPort     Int         @default(993) @map("imap_port")
   status       EmailStatus @default(ACTIVE)
   groupId      Int?        @map("group_id")
+  proxyId      Int?        @map("proxy_id")
   lastCheckAt  DateTime?   @map("last_check_at")
   tokenRefreshedAt DateTime? @map("token_refreshed_at")
   errorMessage String?     @map("error_message") @db.Text
@@ -94,6 +121,7 @@ model EmailAccount {
   updatedAt    DateTime    @updatedAt @map("updated_at")
 
   group   EmailGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  proxy   ProxyConfig? @relation(fields: [proxyId], references: [id], onDelete: SetNull)
   usages  EmailUsage[]
   apiLogs ApiLog[]
   mailCache      MailCache[]

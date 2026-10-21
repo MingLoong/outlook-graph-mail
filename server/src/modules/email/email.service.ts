@@ -36,6 +36,7 @@ export const emailService = {
                     clientId: true,
                     imapHost: true,
                     imapPort: true,
+                    proxyId: true,
                     status: true,
                     groupId: true,
                     group: { select: { id: true, name: true, fetchStrategy: true } },
@@ -69,6 +70,7 @@ export const emailService = {
                 refreshToken: !!includeSecrets,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
                 status: true,
                 groupId: true,
                 group: { select: { id: true, name: true, fetchStrategy: true } },
@@ -111,6 +113,7 @@ export const emailService = {
                 password: true,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
                 status: true,
                 groupId: true,
                 group: {
@@ -138,7 +141,7 @@ export const emailService = {
      * 创建邮箱账户
      */
     async create(input: CreateEmailInput) {
-        const { email, provider, clientId, refreshToken, password, imapHost, imapPort, groupId } = input;
+        const { email, provider, clientId, refreshToken, password, imapHost, imapPort, groupId, proxyId } = input;
 
         const exists = await prisma.emailAccount.findUnique({ where: { email } });
         if (exists) {
@@ -156,6 +159,7 @@ export const emailService = {
             status: 'ACTIVE',
             imapPort: imapPort ?? providerConfig.imapPort ?? 993,
             groupId: groupId || null,
+            proxyId: proxyId ?? null,
         };
 
         if (provider === 'outlook') {
@@ -176,6 +180,7 @@ export const emailService = {
                 clientId: true,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
                 status: true,
                 groupId: true,
                 createdAt: true,
@@ -194,12 +199,15 @@ export const emailService = {
             throw new AppError('NOT_FOUND', 'Email account not found', 404);
         }
 
-        const { provider, refreshToken, password, clientId, imapHost, imapPort, ...rest } = input;
+        const { provider, refreshToken, password, clientId, imapHost, imapPort, proxyId, ...rest } = input;
         const updateData: Prisma.EmailAccountUpdateInput = { ...rest };
 
         // 处理提供商变更或保留原值
         const nextProvider = provider || exists.provider;
         updateData.provider = nextProvider;
+        if (proxyId !== undefined) {
+            updateData.proxy = proxyId === null ? { disconnect: true } : { connect: { id: proxyId } };
+        }
 
         const providerConfig = getProviderConfig(nextProvider);
         if (!providerConfig) {
@@ -226,6 +234,7 @@ export const emailService = {
                 clientId: true,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
                 status: true,
                 updatedAt: true,
             },
@@ -439,6 +448,7 @@ export const emailService = {
                 password: true,
                 imapHost: true,
                 imapPort: true,
+                proxyId: true,
             },
         });
 

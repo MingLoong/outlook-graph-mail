@@ -30,7 +30,7 @@ import {
     GroupOutlined,
     SyncOutlined,
 } from '@ant-design/icons';
-import { emailApi, groupApi } from '../../api';
+import { emailApi, groupApi, proxyApi, type ProxyConfigItem } from '../../api';
 import { getErrorMessage } from '../../utils/error';
 import { requestData } from '../../utils/request';
 import dayjs from 'dayjs';
@@ -130,6 +130,7 @@ interface EmailAccount {
     imapPort: number;
     status: 'ACTIVE' | 'ERROR' | 'DISABLED';
     groupId: number | null;
+    proxyId: number | null;
     group: { id: number; name: string } | null;
     lastCheckAt: string | null;
     tokenRefreshedAt: string | null;
@@ -201,6 +202,7 @@ const EmailsPage: React.FC = () => {
 
     // Group-related state
     const [groups, setGroups] = useState<EmailGroup[]>([]);
+    const [proxies, setProxies] = useState<ProxyConfigItem[]>([]);
     const [groupModalVisible, setGroupModalVisible] = useState(false);
     const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
     const [groupForm] = Form.useForm();
@@ -229,6 +231,17 @@ const EmailsPage: React.FC = () => {
         }
     }, []);
 
+    const fetchProxies = useCallback(async () => {
+        const result = await requestData<ProxyConfigItem[]>(
+            () => proxyApi.getList(),
+            '获取代理配置失败',
+            { silent: true }
+        );
+        if (result) {
+            setProxies(result);
+        }
+    }, []);
+
     const fetchData = useCallback(async () => {
         const currentRequestId = ++latestListRequestIdRef.current;
         setLoading(true);
@@ -252,9 +265,10 @@ const EmailsPage: React.FC = () => {
     useEffect(() => {
         const timer = window.setTimeout(() => {
             void fetchGroups();
+            void fetchProxies();
         }, 0);
         return () => window.clearTimeout(timer);
-    }, [fetchGroups]);
+    }, [fetchGroups, fetchProxies]);
 
     useEffect(() => {
         const timer = window.setTimeout(() => {
@@ -297,6 +311,7 @@ const EmailsPage: React.FC = () => {
                     imapPort: details.imapPort,
                     status: details.status,
                     groupId: details.groupId,
+                    proxyId: details.proxyId ?? undefined,
                 });
             }
         } catch {
@@ -372,6 +387,7 @@ const EmailsPage: React.FC = () => {
                 const submitData = {
                     ...buildPayload(),
                     groupId: normalizedGroupId ?? null,
+                    proxyId: toOptionalNumber(values.proxyId) ?? null,
                 };
                 const res = await emailApi.update(editingId, submitData as Parameters<typeof emailApi.update>[1]);
                 if (res.code === 200) {
@@ -386,6 +402,7 @@ const EmailsPage: React.FC = () => {
                 const submitData = {
                     ...buildPayload(),
                     groupId: toOptionalNumber(values.groupId),
+                    proxyId: toOptionalNumber(values.proxyId),
                 };
                 const res = await emailApi.create(submitData as Parameters<typeof emailApi.create>[0]);
                 if (res.code === 200) {
@@ -872,6 +889,18 @@ const EmailsPage: React.FC = () => {
         [groups]
     );
 
+    const proxyOptions = useMemo(
+        () =>
+            proxies.map((proxy: ProxyConfigItem) => ({
+                value: proxy.id,
+                label:
+                    proxy.type === 'SSH'
+                        ? `${proxy.name}（SSH ${proxy.sshHost}）${proxy.enabled ? '' : ' · 已停用'}`
+                        : `${proxy.name}（${proxy.type}）${proxy.enabled ? '' : ' · 已停用'}`,
+            })),
+        [proxies]
+    );
+
     // ========================================
     // Group table columns
     // ========================================
@@ -1151,6 +1180,13 @@ const EmailsPage: React.FC = () => {
 
                     <Form.Item name="groupId" label="所属分组">
                         <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
+                    </Form.Item>
+                    <Form.Item
+                        name="proxyId"
+                        label="网络代理"
+                        extra="海外邮箱或国内邮箱无法直连时，选择一条代理配置；留空则直连"
+                    >
+                        <Select placeholder="直连（不使用代理）" allowClear options={proxyOptions} />
                     </Form.Item>
                     <Form.Item name="status" label="状态" initialValue="ACTIVE">
                         <Select>

@@ -493,6 +493,7 @@ export const emailApi = {
         imapHost?: string;
         imapPort?: number;
         groupId?: number;
+        proxyId?: number | null;
     }) =>
         requestPost<Record<string, unknown>, typeof data>(
             '/admin/emails',
@@ -526,6 +527,7 @@ export const emailApi = {
         imapPort?: number;
         status?: string;
         groupId?: number | null;
+        proxyId?: number | null;
     }) =>
         requestPut<Record<string, unknown>, typeof data>(
             `/admin/emails/${id}`,
@@ -660,6 +662,67 @@ export const groupApi = {
         requestPost<{ count: number }, { emailIds: number[] }>(`/admin/email-groups/${groupId}/remove`, {
             emailIds,
         }, { invalidatePrefixes: ['/admin/email-groups', '/admin/emails', '/admin/api-keys'] }),
+};
+
+// ========================================
+// 代理配置 API（SSH 隧道 / SOCKS5 / HTTP）
+// ========================================
+
+export interface ProxyConfigItem {
+    id: number;
+    name: string;
+    type: 'SSH' | 'SOCKS5' | 'HTTP';
+    url?: string | null;
+    sshHost?: string | null;
+    sshPort?: number;
+    sshUser?: string | null;
+    authType: 'PASSWORD' | 'KEY';
+    enabled: boolean;
+    hasPassword: boolean;
+    hasPrivateKey: boolean;
+    hasPassphrase: boolean;
+    privateKeyPreview?: string;
+    lastCheckedAt?: string | null;
+    lastError?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
+export interface ProxyTestResult {
+    ok: boolean;
+    type: string;
+    loginOk: boolean;
+    loginError?: string;
+    host?: string | null;
+    port?: number;
+    user?: string | null;
+    targets: Array<{ host: string; port: number; ok: boolean; ms?: number; error?: string }>;
+}
+
+export const proxyApi = {
+    getList: <T = ProxyConfigItem>() => requestGet<T[]>('/admin/proxies', { cacheMs: 3000 }),
+
+    create: (data: Partial<ProxyConfigItem> & { name: string; password?: string; privateKey?: string; passphrase?: string }) =>
+        requestPost<ProxyConfigItem, typeof data>('/admin/proxies', data, {
+            invalidatePrefixes: ['/admin/proxies', '/admin/emails'],
+        }),
+
+    update: (id: number, data: Partial<ProxyConfigItem> & { password?: string; privateKey?: string; passphrase?: string }) =>
+        requestPut<ProxyConfigItem, typeof data>(`/admin/proxies/${id}`, data, {
+            invalidatePrefixes: ['/admin/proxies', '/admin/emails'],
+        }),
+
+    delete: (id: number) =>
+        requestDelete<{ id: number }>(`/admin/proxies/${id}`, {
+            invalidatePrefixes: ['/admin/proxies', '/admin/emails'],
+        }),
+
+    test: (id: number, targets?: Array<{ host: string; port: number }>) =>
+        requestPost<ProxyTestResult, { targets?: Array<{ host: string; port: number }> }>(
+            `/admin/proxies/${id}/test`,
+            { targets },
+            { invalidatePrefixes: ['/admin/proxies'] }
+        ),
 };
 
 // ========================================

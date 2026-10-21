@@ -19,6 +19,7 @@ import adminRoutes from './modules/admin/admin.routes.js';
 import apiKeyRoutes from './modules/api-key/apiKey.routes.js';
 import emailRoutes from './modules/email/email.routes.js';
 import groupRoutes from './modules/email/group.routes.js';
+import proxyRoutes from './modules/proxy/proxy.routes.js';
 import mailRoutes from './modules/mail/mail.routes.js';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 
@@ -97,6 +98,7 @@ export async function buildApp() {
     await fastify.register(apiKeyRoutes, { prefix: '/admin/api-keys' });
     await fastify.register(emailRoutes, { prefix: '/admin/emails' });
     await fastify.register(groupRoutes, { prefix: '/admin/email-groups' });
+    await fastify.register(proxyRoutes, { prefix: '/admin/proxies' });
     await fastify.register(dashboardRoutes, { prefix: '/admin/dashboard' });
 
     // 外部 API
