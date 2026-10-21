@@ -1,4 +1,4 @@
-import { emailService } from '../email/email.service.js';
+﻿import { emailService } from '../email/email.service.js';
 import { poolService } from './pool.service.js';
 import { AppError } from '../../plugins/error.js';
 import { logger } from '../../lib/logger.js';
@@ -56,9 +56,15 @@ async function resolveImapEndpoint(
  * 否则 SELECT/EXAMINE 阶段会直接返回 "Unsafe Login"。
  * node-imap 不会自动发送，这里在 ready 后补发一次，失败不影响后续流程。
  */
-async function ensureImapId(imap: Imap, provider?: string | null): Promise<void> {
+async function ensureImapId(imap: Imap, provider?: string | null, host?: string | null): Promise<void> {
     const key = (provider || '').toLowerCase();
-    if (!['163', '126', 'yahoo'].includes(key)) {
+    const hostName = (host || '').toLowerCase();
+    // 网易/Coremail 系（163/126/139/阿里）与 Yahoo 都要求或兼容 IMAP ID；
+    // custom 类型账号按服务器域名识别，避免漏发导致 Unsafe Login 或连接被重置
+    const needsId =
+        ['163', '126', 'yahoo'].includes(key) ||
+        /(^|\.)(163|126|139|sina|sohu|aliyun|yeah)\.(com|net|cn)/.test(hostName);
+    if (!needsId) {
         return;
     }
     const client = imap as unknown as {
@@ -695,7 +701,7 @@ export const mailService = {
             imap.once('ready', async () => {
                 try {
                     // 网易/Yahoo 必须先上报 ID，否则 EXAMINE 会被拒绝（Unsafe Login）
-                    await ensureImapId(imap, providerKey);
+                    await ensureImapId(imap, providerKey, host);
                     // 不同提供商的垃圾箱/已删除文件夹名不同，按候选列表尝试
                     const folderCandidates = getImapFolderCandidates(providerKey, mailbox);
                     let opened = false;
@@ -994,7 +1000,7 @@ export const mailService = {
             };
 
             imap.once('ready', async () => {
-                await ensureImapId(imap, providerKey);
+                await ensureImapId(imap, providerKey, host);
                 imap.openBox(mailbox, true, (err) => {
                     if (err) {
                         imap.end();
