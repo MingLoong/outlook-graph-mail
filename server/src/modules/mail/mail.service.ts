@@ -821,26 +821,42 @@ export const mailService = {
         const imapMatch = /^imap:(\d+)$/.exec(messageId);
         if (imapMatch) {
             const uid = parseInt(imapMatch[1], 10);
-            if (isOutlookProvider(credentials)) {
-                const imapToken = await this.getImapAccessToken(credentials, resolvedProxyConfig);
-                if (!imapToken) {
-                    throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
+            // 走隧道时链路更脆弱，失败后重建连接重试一次再报错
+            const fetchBody = async (): Promise<EmailMessage> => {
+                const run = async () => {
+                    if (isOutlookProvider(credentials)) {
+                        const imapToken = await this.getImapAccessToken(credentials, resolvedProxyConfig);
+                        if (!imapToken) {
+                            throw new AppError('IMAP_TOKEN_FAILED', 'Failed to get IMAP access token', 502);
+                        }
+                        return this.fetchSingleMessageViaImap(
+                            credentials,
+                            mailbox,
+                            uid,
+                            { xoauth2: this.generateAuthString(credentials.email, imapToken) },
+                            endpoint
+                        );
+                    }
+                    return this.fetchSingleMessageViaImap(
+                        credentials,
+                        mailbox,
+                        uid,
+                        { password: credentials.password || '' },
+                        endpoint
+                    );
+                };
+                if (!endpoint) {
+                    return run();
                 }
-                return this.fetchSingleMessageViaImap(
-                    credentials,
-                    mailbox,
-                    uid,
-                    { xoauth2: this.generateAuthString(credentials.email, imapToken) },
-                    endpoint
-                );
-            }
-            return this.fetchSingleMessageViaImap(
-                credentials,
-                mailbox,
-                uid,
-                { password: credentials.password || '' },
-                endpoint
-            );
+                try {
+                    return await run();
+                } catch (err) {
+                    logger.warn({ err, messageId, proxyId: credentials.proxyId }, 'Tunneled body fetch failed, retrying once');
+                    await new Promise((resolve) => setTimeout(resolve, 400));
+                    return run();
+                }
+            };
+            return fetchBody();
         }
 
         if (!isOutlookProvider(credentials)) {

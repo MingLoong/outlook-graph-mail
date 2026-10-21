@@ -176,10 +176,30 @@ export async function acquireSshClient(cfg: SshTunnelConfig): Promise<Client> {
     return client;
 }
 
-/** 通过 SSH 打开到目标的 TCP 通道 */
-function openSshChannel(client: Client, destHost: string, destPort: number): Promise<unknown> {
+/** 通过 SSH 打开到目标的 TCP 通道（带超时，避免通道被拒时静默挂起） */
+function openSshChannel(
+    client: Client,
+    destHost: string,
+    destPort: number,
+    timeoutMs = 15000
+): Promise<unknown> {
     return new Promise((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            reject(new Error(`SSH 通道建立超时（${destHost}:${destPort} 超过 ${timeoutMs}ms）`));
+        }, timeoutMs);
+        timer.unref?.();
+
         client.forwardOut('127.0.0.1', 0, destHost, destPort, (err, stream) => {
+            if (settled) {
+                // 超时后才返回的通道直接关闭，避免泄漏
+                stream?.close?.();
+                return;
+            }
+            settled = true;
+            clearTimeout(timer);
             if (err) {
                 reject(err);
                 return;
@@ -220,8 +240,11 @@ export async function getSshTcpForwarder(
                 socket.pipe(stream).pipe(socket);
             })
             .catch((err: Error) => {
-                logger.warn({ destHost, destPort, err: err.message }, 'SSH forwardOut failed');
+                logger.warn({ destHost, destPort, err: err.message }, 'SSH forwardOut failed, resetting tunnel');
                 socket.destroy();
+                // 通道建立失败通常意味着 SSH 会话已不可用（会话数耗尽/连接半死），
+                // 立即丢弃并让下一次请求重新建连，避免连续失败
+                dropClient(clientKey(cfg));
             });
     });
 
