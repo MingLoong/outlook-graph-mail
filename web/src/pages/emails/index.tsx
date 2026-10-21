@@ -16,6 +16,7 @@ import {
     List,
     Tabs,
     Spin,
+    Switch,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
@@ -187,6 +188,8 @@ const EmailsPage: React.FC = () => {
     const [importProvider, setImportProvider] = useState<string>('auto');
     const [mailList, setMailList] = useState<MailItem[]>([]);
     const [mailLoading, setMailLoading] = useState(false);
+    const [includeJunk, setIncludeJunk] = useState(true);
+    const includeJunkRef = useRef(true);
     const [mailCacheInfo, setMailCacheInfo] = useState<{ cached: boolean; cachedAt?: string }>({ cached: false });
     const [currentEmail, setCurrentEmail] = useState<string>('');
     const [currentEmailId, setCurrentEmailId] = useState<number | null>(null);
@@ -482,7 +485,7 @@ const EmailsPage: React.FC = () => {
         setMailLoading(true);
         const result = await requestData<MailListResult>(
             // 只取邮件头，首屏更快；正文在点「查看」时按需加载
-            () => emailApi.viewMails(emailId, mailbox, { fresh: opts?.fresh, headersOnly: true, limit: 20 }),
+            () => emailApi.viewMails(emailId, mailbox, { fresh: opts?.fresh, headersOnly: true, limit: 20, junk: includeJunkRef.current }),
             '获取邮件失败'
         );
         if (result) {
@@ -1307,7 +1310,21 @@ const EmailsPage: React.FC = () => {
                         <span style={{ marginLeft: 16, color: '#888' }}>
                             共 {mailList.length} 封邮件
                         </span>
-                        {mailCacheInfo.cached && (
+                        <Space size={4} style={{ marginRight: 8 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>包含垃圾箱</Typography.Text>
+                        <Switch
+                            size="small"
+                            checked={includeJunk}
+                            onChange={(checked: boolean) => {
+                                setIncludeJunk(checked);
+                                includeJunkRef.current = checked;
+                                if (currentEmailId) {
+                                    void loadMails(currentEmailId, currentMailbox, { fresh: true });
+                                }
+                            }}
+                        />
+                    </Space>
+                    {mailCacheInfo.cached && (
                             <Tooltip title="短时间内重复打开使用缓存，点「收取新邮件」强制实时拉取">
                                 <Tag color="blue" style={{ marginLeft: 8 }}>
                                     缓存 {mailCacheInfo.cachedAt ? dayjs(mailCacheInfo.cachedAt).format('HH:mm:ss') : ''}

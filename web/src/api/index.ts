@@ -551,7 +551,7 @@ export const emailApi = {
     viewMails: <T = Record<string, unknown>>(
         id: number,
         mailbox?: string,
-        opts?: { fresh?: boolean; headersOnly?: boolean; limit?: number }
+        opts?: { fresh?: boolean; headersOnly?: boolean; limit?: number; junk?: boolean }
     ) =>
         requestGet<{ messages: T[]; cached?: boolean; cachedAt?: string; method?: string }>(
             `/admin/emails/${id}/mails`,
@@ -561,6 +561,7 @@ export const emailApi = {
                     limit: opts?.limit ?? 20,
                     fresh: opts?.fresh ? 1 : undefined,
                     headers: opts?.headersOnly ? 1 : undefined,
+                    junk: opts?.junk === false ? 0 : undefined,
                 },
                 timeout: 90000,
             }

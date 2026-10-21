@@ -128,18 +128,18 @@ export const PROVIDER_FOLDER_MAP: Record<string, Record<string, string[]>> = {
   },
   qq: {
     inbox: ['INBOX'],
-    junkemail: ['Junk', '&V4NXPpCuTvY-'],
-    deleteditems: ['Deleted Messages', '&XfJT0ZABkK5O9g-'],
+    junkemail: ['垃圾邮件', 'Junk', '&V4NXPpCuTvY-'],
+    deleteditems: ['已删除', 'Deleted Messages', '&XfJT0ZABkK5O9g-'],
   },
   '163': {
     inbox: ['INBOX'],
-    junkemail: ['&V4NXPpCuTvY-'],
-    deleteditems: ['&XfJT0ZABkK5O9g-'],
+    junkemail: ['垃圾邮件', '&V4NXPpCuTvY-'],
+    deleteditems: ['已删除', '&XfJT0ZABkK5O9g-'],
   },
   '126': {
     inbox: ['INBOX'],
-    junkemail: ['Junk', '&V4NXPpCuTvY-'],
-    deleteditems: ['Deleted Messages', '&XfJT0ZABkK5O9g-'],
+    junkemail: ['垃圾邮件', 'Junk', '&V4NXPpCuTvY-'],
+    deleteditems: ['已删除', 'Deleted Messages', '&XfJT0ZABkK5O9g-'],
   },
   yahoo: {
     inbox: ['INBOX'],
@@ -153,7 +153,7 @@ export const PROVIDER_FOLDER_MAP: Record<string, Record<string, string[]>> = {
   },
   _default: {
     inbox: ['INBOX'],
-    junkemail: ['Junk', 'Junk Email', 'Spam', 'SPAM', 'Bulk Mail', '垃圾邮件'],
+    junkemail: ['垃圾邮件', 'Junk', 'Junk Email', 'Spam', 'SPAM', 'Bulk Mail', '垃圾邮件'],
     deleteditems: ['Trash', 'Deleted', 'Deleted Messages', '已删除邮件'],
   },
 };
