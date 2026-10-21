@@ -5,6 +5,7 @@ import { logger } from '../../lib/logger.js';
 import {
     getSshSocksUrl,
     getSshTcpForwarder,
+    getSocksTcpForwarder,
     resetTunnel,
     testSshReachability,
     type SshTunnelConfig,
@@ -220,7 +221,14 @@ export const proxyService = {
         }
         if (row.type === 'SOCKS5') {
             const url = row.url || '';
-            return { id: row.id, name: row.name, type: 'SOCKS5', httpProxy: async () => ({ socks5: url }) };
+            return {
+                id: row.id,
+                name: row.name,
+                type: 'SOCKS5',
+                // SOCKS5 同时支持 HTTP（走 socks-proxy-agent）和 IMAP（走本地 TCP 转发）
+                imapEndpoint: (host: string, port: number) => getSocksTcpForwarder(url, host, port),
+                httpProxy: async () => ({ socks5: url }),
+            };
         }
         if (row.type === 'HTTP') {
             const url = row.url || '';
