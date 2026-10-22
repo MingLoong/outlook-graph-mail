@@ -238,6 +238,53 @@ export async function warmSystemSsh(
     await Promise.all(targets.map((x) => systemSshForward(cfg, x.host, x.port).catch(() => null)));
 }
 
+
+/** 重置某个代理配置对应的所有隧道（代理配置变更时调用） */
+export function resetSystemSsh(id: string): void {
+    const needle = '|' + id + '|';
+    for (const [key, entry] of tunnels) {
+        if (key.includes(needle)) {
+            try {
+                entry.proc.kill('SIGTERM');
+            } catch {
+                // ignore
+            }
+            tunnels.delete(key);
+        }
+    }
+}
+
+/** 测试：经隧道探测目标端口耗时（毫秒） */
+export async function testSystemSshReachability(
+    cfg: SystemSshConfig,
+    destHost: string,
+    destPort: number,
+    timeoutMs = 12000
+): Promise<number> {
+    const started = Date.now();
+    const fwd = await systemSshForward(cfg, destHost, destPort);
+    if (!fwd) {
+        throw new Error('无法建立 SSH 隧道（请确认服务器已安装 ssh / sshpass）');
+    }
+    await new Promise<void>((resolve, reject) => {
+        const socket = net.connect({ host: fwd.host, port: fwd.port });
+        const timer = setTimeout(() => {
+            socket.destroy();
+            reject(new Error('经隧道连接 ' + destHost + ':' + destPort + ' 超时'));
+        }, timeoutMs);
+        socket.once('connect', () => {
+            clearTimeout(timer);
+            socket.destroy();
+            resolve();
+        });
+        socket.once('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+    });
+    return Date.now() - started;
+}
+
 export async function closeSystemSsh(): Promise<void> {
     for (const [, entry] of tunnels) {
         try {
@@ -257,4 +304,4 @@ export async function closeSystemSsh(): Promise<void> {
     keyFiles.clear();
 }
 
-export default { systemSshForward, systemSshSocks, warmSystemSsh, closeSystemSsh };
+export default { systemSshForward, systemSshSocks, warmSystemSsh, closeSystemSsh, resetSystemSsh, testSystemSshReachability };

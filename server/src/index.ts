@@ -6,7 +6,6 @@ import { startApiLogRetentionJob } from './jobs/api-log-retention.js';
 import { startTokenRefreshJob } from './jobs/token-refresh.js';
 import { startMailCacheCleanupJob } from './jobs/mail-cache-retention.js';
 import { closeAllTunnels } from './lib/tunnel.js';
-import { closeSystemSsh } from './lib/system-ssh.js';
 
 async function main() {
     const app = await buildApp();
@@ -21,7 +20,6 @@ async function main() {
         stopTokenRefreshJob();
         stopMailCacheCleanupJob();
         await closeAllTunnels();
-        await closeSystemSsh();
         await app.close();
         await prisma.$disconnect();
         process.exit(0);
