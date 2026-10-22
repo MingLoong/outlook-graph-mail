@@ -573,8 +573,8 @@ export const emailApi = {
 
     // 查看单封邮件正文 (按需加载)
     viewMailBody: <T = Record<string, unknown>>(id: number, messageId: string, mailbox?: string) =>
-        requestGet<T>(`/admin/emails/${id}/mails/${encodeURIComponent(messageId)}`, {
-            params: { mailbox },
+        requestGet<T>(`/admin/emails/${id}/mail-body`, {
+            params: { mailbox, messageId },
             timeout: 60000,
         }),
 

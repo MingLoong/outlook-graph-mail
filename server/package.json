@@ -1,6 +1,6 @@
 {
     "name": "gongxi-mail-server",
-    "version": "2.0.0.rc1",
+    "version": "2.0.0.rc2",
     "description": "GongXi Mail Server - Fastify + TypeScript + Prisma",
     "type": "module",
     "main": "dist/index.js",

@@ -202,6 +202,29 @@ const emailRoutes: FastifyPluginAsync = async (fastify) => {
     });
 
     // 查看单封邮件正文 (管理员专用，按需加载)
+    // 使用 query 参数避免 Graph 邮件 ID 中的特殊字符影响路由匹配
+    const getMailBody = async (request: any) => {
+        const { id } = request.params as { id: string };
+        const { mailbox, messageId } = request.query as { mailbox?: string; messageId?: string };
+        if (!messageId) throw new AppError('MESSAGE_ID_REQUIRED', '缺少邮件 ID', 400);
+        const emailData = await emailService.getById(parseInt(id), true);
+        const credentials = {
+            id: emailData.id,
+            email: emailData.email,
+            provider: emailData.provider,
+            clientId: emailData.clientId,
+            refreshToken: emailData.refreshToken,
+            password: emailData.password,
+            imapHost: emailData.imapHost,
+            imapPort: emailData.imapPort,
+            proxyId: emailData.proxyId,
+            autoAssigned: false,
+            fetchStrategy: emailData.group?.fetchStrategy,
+        };
+        const body = await mailService.getEmailBody(credentials, mailbox || 'INBOX', messageId);
+        return { success: true, data: body };
+    };
+    fastify.get('/:id/mail-body', getMailBody);
     fastify.get('/:id/mails/:messageId', async (request) => {
         const { id, messageId } = request.params as { id: string; messageId: string };
         const { mailbox } = request.query as { mailbox?: string };
