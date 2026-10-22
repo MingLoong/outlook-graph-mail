@@ -10,6 +10,7 @@ import {
     testSshReachability,
     type SshTunnelConfig,
 } from '../../lib/tunnel.js';
+import { systemSshForward, systemSshSocks, warmSystemSsh } from '../../lib/system-ssh.js';
 import { AppError } from '../../plugins/error.js';
 
 type ProxyRow = {
@@ -235,12 +236,42 @@ export const proxyService = {
             return { id: row.id, name: row.name, type: 'HTTP', httpProxy: async () => ({ http: url }) };
         }
         const cfg = buildTunnelConfig(row);
+        const sysCfg = {
+            id: cfg.id,
+            host: cfg.host,
+            port: cfg.port,
+            username: cfg.username,
+            password: cfg.password,
+            privateKey: cfg.privateKey,
+            passphrase: cfg.passphrase,
+        };
+
+        // 后台预热，首个请求无需等待建连（失败不影响主流程）
+        void warmSystemSsh(sysCfg, [
+            { host: 'imap.qiye.aliyun.com', port: 993 },
+            { host: 'imap.139.com', port: 993 },
+            { host: 'imap.163.com', port: 993 },
+        ]).catch(() => undefined);
+
         return {
             id: row.id,
             name: row.name,
             type: 'SSH',
-            imapEndpoint: (host: string, port: number) => getSshTcpForwarder(cfg, host, port),
-            httpProxy: async () => ({ socks5: await getSshSocksUrl(cfg) }),
+            imapEndpoint: async (host: string, port: number) => {
+                // 优先系统 ssh -L（更稳定），失败回退 ssh2 通道
+                const sysFwd = await systemSshForward(sysCfg, host, port).catch(() => null);
+                if (sysFwd) {
+                    return sysFwd;
+                }
+                return getSshTcpForwarder(cfg, host, port);
+            },
+            httpProxy: async () => {
+                const socks = await systemSshSocks(sysCfg).catch(() => null);
+                if (socks) {
+                    return { socks5: socks };
+                }
+                return { socks5: await getSshSocksUrl(cfg) };
+            },
         };
     },
 
