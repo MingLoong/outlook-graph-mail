@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 // 第三方邮箱提供商 key（'auto' 仅用于导入场景）
-export const MAIL_PROVIDER_KEYS = ['outlook', 'gmail', 'qq', '163', '126', 'yahoo', 'aliyun', 'custom'] as const;
+export const MAIL_PROVIDER_KEYS = ['outlook', 'gmail', 'qq', '163', '126', 'yahoo', 'aliyun', 'aliyunqiye', 'custom'] as const;
 
 export const providerSchema = z.enum(MAIL_PROVIDER_KEYS);
 
