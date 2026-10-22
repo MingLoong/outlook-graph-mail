@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-    Alert,
     Button,
     Card,
     Form,
@@ -20,7 +19,7 @@ import {
 import { CloudServerOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { proxyApi, type ProxyConfigItem, type ProxyTestResult } from '../../api';
 
-const { Text, Paragraph } = Typography;
+const { Text } = Typography;
 
 const TYPE_LABEL: Record<string, { color: string; text: string }> = {
     SSH: { color: 'blue', text: 'SSH 隧道' },
@@ -225,24 +224,7 @@ const ProxyPage: React.FC = () => {
                     </Button>
                 }
             >
-                <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                    message="使用说明"
-                    description={
-                        <div>
-                            <Paragraph style={{ marginBottom: 4 }}>
-                                <b>SSH 隧道</b>：填一台能访问目标邮箱的机器（跳板机），邮件收发会从它出口。适合海外服务器访问国内邮箱、或国内服务器访问
-                                Gmail。
-                            </Paragraph>
-                            <Paragraph style={{ marginBottom: 0 }}>
-                                配置后到「邮箱管理」把账号的代理设为该配置即可生效。密码/私钥加密存储，接口不会回显。
-                            </Paragraph>
-                        </div>
-                    }
-                />
-
+                
                 <Table
                     rowKey="id"
                     size="small"
