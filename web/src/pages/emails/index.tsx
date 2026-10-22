@@ -137,6 +137,7 @@ interface EmailAccount {
     lastCheckAt: string | null;
     tokenRefreshedAt: string | null;
     errorMessage: string | null;
+    tags: string[];
     createdAt: string;
 }
 
@@ -318,6 +319,7 @@ const EmailsPage: React.FC = () => {
                     status: details.status,
                     groupId: details.groupId,
                     proxyId: details.proxyId ?? undefined,
+                    tags: details.tags || [],
                 });
             }
         } catch {
@@ -394,6 +396,7 @@ const EmailsPage: React.FC = () => {
                     ...buildPayload(),
                     groupId: normalizedGroupId ?? null,
                     proxyId: toOptionalNumber(values.proxyId) ?? null,
+                    tags: values.tags || [],
                 };
                 const res = await emailApi.update(editingId, submitData as Parameters<typeof emailApi.update>[1]);
                 if (res.code === 200) {
@@ -409,6 +412,7 @@ const EmailsPage: React.FC = () => {
                     ...buildPayload(),
                     groupId: toOptionalNumber(values.groupId),
                     proxyId: toOptionalNumber(values.proxyId),
+                    tags: values.tags || [],
                 };
                 const res = await emailApi.create(submitData as Parameters<typeof emailApi.create>[0]);
                 if (res.code === 200) {
@@ -717,6 +721,7 @@ const EmailsPage: React.FC = () => {
             title: '邮箱',
             dataIndex: 'email',
             key: 'email',
+            width: 300,
             ellipsis: true,
         },
         {
@@ -730,16 +735,18 @@ const EmailsPage: React.FC = () => {
             },
         },
         {
-            title: '客户端 ID / IMAP 服务器',
-            key: 'credential',
-            ellipsis: true,
-            render: (_: unknown, record: EmailAccount) => {
-                if ((record.provider || 'outlook') === 'outlook') {
-                    return record.clientId || '-';
-                }
-                return record.imapHost ? `${record.imapHost}:${record.imapPort}` : '-';
-            },
+            title: '标签',
+            dataIndex: 'tags',
+            key: 'tags',
+            width: 220,
+            render: (tags: string[] | null | undefined) => (
+                <Space size={[0, 4]} wrap>
+                    {(tags || []).map((tag) => <Tag key={tag} color="geekblue">{tag}</Tag>)}
+                    {(!tags || tags.length === 0) && <span style={{ color: '#999' }}>未设置</span>}
+                </Space>
+            ),
         },
+
         {
             title: '分组',
             dataIndex: 'group',
@@ -840,6 +847,7 @@ const EmailsPage: React.FC = () => {
         () => ({
             selectedRowKeys,
             onChange: setSelectedRowKeys,
+            columnWidth: 36,
         }),
         [selectedRowKeys]
     );
@@ -1196,6 +1204,13 @@ const EmailsPage: React.FC = () => {
                         <Select placeholder="可选：选择分组" allowClear options={groupOptions} />
                     </Form.Item>
                     <Form.Item
+                        name="tags"
+                        label="标签"
+                        extra="可添加多个标签，按回车确认；保存时会替换原有标签"
+                    >
+                        <Select mode="tags" tokenSeparators={[',', '，']} placeholder="输入标签后按回车，可添加多个" />
+                    </Form.Item>
+                    <Form.Item
                         name="proxyId"
                         label="网络代理"
                         extra="海外邮箱或国内邮箱无法直连时，选择一条代理配置；留空则直连"
@@ -1333,8 +1348,8 @@ const EmailsPage: React.FC = () => {
                         }}
                         options={
                             mailFolders.length > 0
-                                ? mailFolders.map((f) => ({ value: f.path, label: `${f.name} (${f.count})` }))
-                                : [{ value: 'INBOX', label: 'INBOX' }, { value: 'junkemail', label: '垃圾箱' }]
+                                ? mailFolders.map((f) => ({ value: f.path, label: `${f.path.toUpperCase() === 'INBOX' ? '收件箱' : f.name} (${f.count})` }))
+                                : [{ value: 'INBOX', label: '收件箱' }, { value: 'junkemail', label: '垃圾箱' }]
                         }
                     />
                     <Space size={4} style={{ marginRight: 8 }}>

@@ -496,6 +496,7 @@ export const emailApi = {
         imapPort?: number;
         groupId?: number;
         proxyId?: number | null;
+        tags?: string[];
     }) =>
         requestPost<Record<string, unknown>, typeof data>(
             '/admin/emails',
@@ -530,6 +531,7 @@ export const emailApi = {
         status?: string;
         groupId?: number | null;
         proxyId?: number | null;
+        tags?: string[];
     }) =>
         requestPut<Record<string, unknown>, typeof data>(
             `/admin/emails/${id}`,

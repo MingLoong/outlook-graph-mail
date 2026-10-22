@@ -20,7 +20,13 @@ const mailRequestSchema = z.object({
 // 纯文本邮件请求 Schema
 const mailTextRequestSchema = z.object({
     email: z.string().email(),
-    match: z.string().optional(), // 正则表达式 (可选)
+    match: z.string().optional(), // 自定义正则表达式（可选）
+    sender: z.string().optional(), // 发件人包含关键词
+    subject: z.string().optional(), // 主题包含关键词
+    limit: z.coerce.number().int().min(1).max(50).default(10),
+    since: z.coerce.number().int().min(0).optional(), // 最近多少分钟
+    auto: z.union([z.string(), z.number(), z.boolean()]).optional(), // 自动提取验证码
+    code_length: z.coerce.number().int().min(4).max(8).default(6),
     no_cache: z.union([z.string(), z.number(), z.boolean()]).optional(),
 });
 
@@ -263,7 +269,7 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
         try {
             const result = await mailService.getEmails(credentials, {
                 mailbox: 'inbox',
-                limit: 1, // 只取最新一封
+                limit: input.limit,
                 fresh: parseBoolParam(input.no_cache),
                 cacheTtlSeconds: env.MAIL_CACHE_TTL_API_SECONDS,
             });
@@ -284,29 +290,56 @@ const mailRoutes: FastifyPluginAsync = async (fastify) => {
                 return;
             }
 
-            const message = result.messages[0];
-            // 优先使用 text 字段
-            let content = message.text || '';
+            const stripHtml = (html: string) => html
+                .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+                .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<br\s*\/?>(?=.)/gi, '\n')
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/&nbsp;/gi, ' ')
+                .replace(/&amp;/gi, '&')
+                .replace(/\s+/g, ' ')
+                .trim();
+            const candidates = result.messages.filter((item) => {
+                const from = String(item.from || '').toLowerCase();
+                const subject = String(item.subject || '').toLowerCase();
+                const date = item.date ? new Date(item.date).getTime() : 0;
+                if (input.sender && !from.includes(input.sender.toLowerCase())) return false;
+                if (input.subject && !subject.includes(input.subject.toLowerCase())) return false;
+                if (input.since && date < Date.now() - input.since * 60_000) return false;
+                return true;
+            });
+            if (candidates.length === 0) {
+                reply.code(404).type('text/plain').send('Error: No matching messages found');
+                return;
+            }
 
-            // 如果指定了正则匹配
+            const message = candidates[0];
+            const content = [message.text || '', stripHtml(message.html || '')].filter(Boolean).join('\n');
+            let extracted = content;
             if (input.match) {
                 try {
-                    const regex = new RegExp(input.match);
-                    const match = content.match(regex);
-                    if (match) {
-                        // 如果有捕获组，返回第一个捕获组；否则返回整个匹配
-                        content = match[1] || match[0];
-                    } else {
+                    const match = content.match(new RegExp(input.match, 'i'));
+                    if (!match) {
                         reply.code(404).type('text/plain').send('Error: No match found');
                         return;
                     }
+                    extracted = match[1] || match[0];
                 } catch (_e) {
                     reply.code(400).type('text/plain').send('Error: Invalid regex pattern');
                     return;
                 }
+            } else if (parseBoolParam(input.auto)) {
+                const codePattern = new RegExp(`(?:(?:验证码|verification(?:\\s+code)?|security(?:\\s+code)?|one[-\\s]?time(?:\\s+password)?|OTP)[^\\d]{0,40})([A-Z0-9]{${input.code_length}})`, 'i');
+                const fallback = new RegExp(`\\b([A-Z0-9]{${input.code_length}})\\b`, 'i');
+                const match = content.match(codePattern) || content.match(fallback);
+                if (!match) {
+                    reply.code(404).type('text/plain').send('Error: Verification code not found');
+                    return;
+                }
+                extracted = match[1] || match[0];
             }
 
-            return reply.type('text/plain').send(content);
+            return reply.type('text/plain').send(extracted.trim());
 
         } catch (err: unknown) {
             await mailService.updateEmailStatus(credentials.id, false, getErrorMessage(err));

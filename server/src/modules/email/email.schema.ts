@@ -48,6 +48,7 @@ const createBaseSchema = z.object({
     imapPort: z.coerce.number().int().min(1).max(65535).optional(),
     groupId: z.coerce.number().int().positive().optional(),
     proxyId: z.union([z.coerce.number().int().positive(), z.null()]).optional(),
+    tags: z.array(z.string().trim().min(1).max(50)).max(30).optional(),
 });
 
 export const createEmailSchema = createBaseSchema.superRefine((value, ctx) => {
